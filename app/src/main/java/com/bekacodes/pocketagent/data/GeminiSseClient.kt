@@ -4,10 +4,24 @@ import com.bekacodes.pocketagent.domain.AgentTool
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
-import kotlinx.serialization.json.*
-import okhttp3.*
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.addJsonObject
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
+import kotlinx.serialization.json.putJsonArray
+import kotlinx.serialization.json.putJsonObject
 import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.Response
 import okhttp3.sse.EventSource
 import okhttp3.sse.EventSourceListener
 import okhttp3.sse.EventSources
@@ -42,6 +56,21 @@ class GeminiSseClient(
         }
 
         val requestPayload = buildJsonObject {
+            putJsonObject("systemInstruction") {
+                putJsonArray("parts") {
+                    addJsonObject {
+                        put(
+                            "text",
+                            "You are PocketAgent, an on-device financial assistant connected to a local SQLite database. " +
+                                    "Only call tools when the user explicitly asks to check expenses (`get_expenses`), " +
+                                    "log a specific expense (`insert_expense`), delete the last entry (`delete_last_expense`), " +
+                                    "or clear the database (`clear_all_expenses`). " +
+                                    "Never invent or guess dollar amounts. If the user says hello or asks a general question, " +
+                                    "reply conversationally without calling any tools."
+                        )
+                    }
+                }
+            }
             putJsonArray("contents") {
                 addJsonObject {
                     putJsonArray("parts") {
@@ -66,7 +95,8 @@ class GeminiSseClient(
             }
         }
 
-        val url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:streamGenerateContent?alt=sse&key=$apiKey"
+        val url =
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:streamGenerateContent?alt=sse&key=$apiKey"
 
         val request = Request.Builder()
             .url(url)
@@ -76,7 +106,12 @@ class GeminiSseClient(
             .build()
 
         val listener = object : EventSourceListener() {
-            override fun onEvent(eventSource: EventSource, id: String?, type: String?, data: String) {
+            override fun onEvent(
+                eventSource: EventSource,
+                id: String?,
+                type: String?,
+                data: String
+            ) {
                 runCatching {
                     val root = json.parseToJsonElement(data).jsonObject
 
@@ -113,7 +148,8 @@ class GeminiSseClient(
 
             override fun onFailure(eventSource: EventSource, t: Throwable?, response: Response?) {
                 val errorBody = response?.body?.string()?.take(200)
-                val msg = t?.localizedMessage ?: "HTTP ${response?.code}: ${errorBody ?: "Stream failed"}"
+                val msg =
+                    t?.localizedMessage ?: "HTTP ${response?.code}: ${errorBody ?: "Stream failed"}"
                 trySend(LlmStreamEvent.StreamError(msg))
                 close()
             }
@@ -135,7 +171,8 @@ class GeminiSseClient(
                         "You are PocketAgent, an on-device financial assistant connected to a local SQLite database. " +
                                 "Always use `get_expenses` to check real figures before answering spending questions. " +
                                 "Use `insert_expense` to log new expenses and `delete_last_expense` to undo/delete the last entry. " +
-                                "Format dollar amounts in bold like **$42.50**. Keep responses concise (1-3 sentences)."
+                                "Format dollar amounts in bold like **$42.50**. Keep responses concise (1-3 sentences)." +
+                                "Use clear_all_expenses when the user asks to clear or wipe the entire database."
                     )
                 }
             }
@@ -151,7 +188,10 @@ class GeminiSseClient(
                             addJsonObject {
                                 put("name", tool.name)
                                 put("description", tool.description)
-                                put("parameters", json.parseToJsonElement(tool.parametersSchemaJson))
+                                put(
+                                    "parameters",
+                                    json.parseToJsonElement(tool.parametersSchemaJson)
+                                )
                             }
                         }
                     }

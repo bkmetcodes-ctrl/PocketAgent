@@ -7,8 +7,6 @@ import com.bekacodes.pocketagent.BuildConfig
 import com.bekacodes.pocketagent.data.ExpenseDao
 import com.bekacodes.pocketagent.data.GeminiSseClient
 import com.bekacodes.pocketagent.data.LlmStreamEvent
-import com.bekacodes.pocketagent.data.ResetDemoLedger
-import com.bekacodes.pocketagent.data.seedDemoDataIfEmpty
 import com.bekacodes.pocketagent.domain.AgentToolRegistry
 import com.bekacodes.pocketagent.domain.AuditResult
 import com.bekacodes.pocketagent.domain.ToolCallAuditor
@@ -72,17 +70,9 @@ class ChatViewModel(
 
     init {
         viewModelScope.launch {
-            expenseDao.seedDemoDataIfEmpty()
-
-            launch {
-                expenseDao.observeAllExpenses().collect { rows ->
-                    _uiState.update { it.copy(expenses = rows) }
-                }
+            expenseDao.observeAllExpenses().collect { rows ->
+                _uiState.update { it.copy(expenses = rows) }
             }
-
-            startStreamingTurn(
-                "How much did I spend on coffee this month, and log a $28 dinner from last night."
-            )
         }
     }
 
@@ -91,16 +81,16 @@ class ChatViewModel(
             is ChatIntent.UpdateInput -> _uiState.update { it.copy(inputText = intent.text) }
             is ChatIntent.SwitchEngineMode -> _uiState.update { it.copy(engineMode = intent.mode) }
             is ChatIntent.ToggleInspector -> _uiState.update { it.copy(isInspectorVisible = intent.visible) }
-            is ChatIntent.ResetDemoDatabase -> {
-                viewModelScope.launch { ResetDemoLedger(expenseDao) }
+            is ChatIntent.ClearDatabase -> {
+                viewModelScope.launch {
+                    expenseDao.clearAll()
+                }
             }
-
             is ChatIntent.SendPrompt -> startStreamingTurn(intent.prompt)
             is ChatIntent.StopGeneration -> {
                 activeGenerationJob?.cancel()
                 pendingApprovalDeferred?.cancel()
             }
-
             is ChatIntent.ResolveWriteApproval -> {
                 resolveWriteApproval(intent.messageId, intent.approved)
             }
@@ -318,22 +308,53 @@ class ChatViewModel(
     /**
      * DEMO SIMULATOR ORCHESTRATOR (Offline fallback when Demo Sim pill is selected)
      */
-    private fun orchestrateDemoSimTurn(
-        prompt: String,
-        agentMsgId: String
-    ): Flow<StreamPipelineEvent> = callbackFlow {
+    private fun orchestrateDemoSimTurn(prompt: String, agentMsgId: String): Flow<StreamPipelineEvent> = callbackFlow {
         val job = launch {
-            val lower = prompt.lowercase()
+            val lower = prompt.lowercase().trim()
+
+            // Only extract an amount if the user actually typed a number
+            val parsedAmount = Regex("""\$?(\d+(\.\d{1,2})?)""")
+                .find(prompt)
+                ?.groupValues?.get(1)
+                ?.toDoubleOrNull()
+
             when {
-                lower.contains("undo") || lower.contains("delete") -> {
+                // 1. Clear entire database
+                lower.contains("clear") || lower.contains("wipe") -> {
+                    val clearTool = toolRegistry.getTool("clear_all_expenses")!!
+                    val args = buildJsonObject {}
+                    val preview = clearTool.buildApprovalPreview(args)!!
+
+                    streamWords("Are you sure you want to permanently clear all expenses from your local database?")
+
+                    val deferred = CompletableDeferred<Boolean>().also { pendingApprovalDeferred = it }
+                    send(
+                        StreamPipelineEvent.RequestWriteApproval(
+                            PendingWriteCardState(
+                                callId = "call_${agentMsgId.take(4)}",
+                                actionName = preview.actionBadge,
+                                fields = preview.fields
+                            )
+                        )
+                    )
+
+                    if (deferred.await()) {
+                        val result = clearTool.execute(args)
+                        streamWords("\n\nDone! ${result.humanReadableSummary}.")
+                    } else {
+                        streamWords("\n\nCancelled—your database records were kept.")
+                    }
+                }
+
+                // 2. Delete / Undo last entry
+                lower.contains("undo") || lower.contains("delete") || lower.contains("remove") -> {
                     val deleteTool = toolRegistry.getTool("delete_last_expense")!!
                     val args = buildJsonObject {}
                     val preview = deleteTool.buildApprovalPreview(args)!!
 
                     streamWords("I can remove your most recent expense entry. Please confirm below:")
 
-                    val deferred =
-                        CompletableDeferred<Boolean>().also { pendingApprovalDeferred = it }
+                    val deferred = CompletableDeferred<Boolean>().also { pendingApprovalDeferred = it }
                     send(
                         StreamPipelineEvent.RequestWriteApproval(
                             PendingWriteCardState(
@@ -352,75 +373,53 @@ class ChatViewModel(
                     }
                 }
 
-                lower.contains("summary") -> {
+                // 3. Query / Summary
+                lower.contains("summary") || lower.contains("how much") || lower.contains("total") || lower.contains("list") -> {
                     val getTool = toolRegistry.getTool("get_expenses")!!
                     val sig = "get_expenses()"
                     send(StreamPipelineEvent.ReadToolStarted(sig))
                     delay(250)
 
                     val timed = measureTimedValue { getTool.execute(buildJsonObject {}) }
-                    send(
-                        StreamPipelineEvent.ReadToolCompleted(
-                            sig,
-                            timed.duration.inWholeMilliseconds.coerceAtLeast(1)
-                        )
-                    )
+                    send(StreamPipelineEvent.ReadToolCompleted(sig, timed.duration.inWholeMilliseconds.coerceAtLeast(1)))
 
-                    val total =
-                        timed.value.jsonOutput["totalAmountUsd"]?.jsonPrimitive?.double ?: 0.0
+                    val total = timed.value.jsonOutput["totalAmountUsd"]?.jsonPrimitive?.double ?: 0.0
                     val count = timed.value.jsonOutput["visitCount"]?.jsonPrimitive?.int ?: 0
 
-                    streamWords(
-                        "Across **$count** recorded transactions in your local SQLite ledger, " +
-                                "your total spending this month is **$${
-                                    String.format(
-                                        "%.2f",
-                                        total
-                                    )
-                                }**."
-                    )
+                    if (count == 0) {
+                        streamWords("Your local SQLite ledger is currently empty (**0 records**, **$0.00**).")
+                    } else {
+                        streamWords(
+                            "Across **$count** recorded transactions in your local SQLite ledger, " +
+                                    "your total spending is **$${String.format("%.2f", total)}**."
+                        )
+                    }
                 }
 
-                else -> {
-                    val getTool = toolRegistry.getTool("get_expenses")!!
-                    val readArgs = buildJsonObject { put("category", "Coffee") }
-                    val sig = "get_expenses(category='Coffee')"
-                    send(StreamPipelineEvent.ReadToolStarted(sig))
-                    delay(300)
-
-                    val timedRead = measureTimedValue { getTool.execute(readArgs) }
-                    send(
-                        StreamPipelineEvent.ReadToolCompleted(
-                            signature = sig,
-                            durationMs = timedRead.duration.inWholeMilliseconds.coerceAtLeast(1)
-                        )
-                    )
-
-                    val coffeeTotal =
-                        timedRead.value.jsonOutput["totalAmountUsd"]?.jsonPrimitive?.double ?: 0.0
-                    val coffeeVisits =
-                        timedRead.value.jsonOutput["visitCount"]?.jsonPrimitive?.int ?: 0
+                // 4. Log an expense — ONLY if the user actually provided a number in their prompt
+                parsedAmount != null -> {
+                    val category = when {
+                        lower.contains("coffee") || lower.contains("cafe") -> "Coffee"
+                        lower.contains("grocer") || lower.contains("market") -> "Groceries"
+                        lower.contains("uber") || lower.contains("taxi") || lower.contains("transit") -> "Transport"
+                        lower.contains("dinner") || lower.contains("lunch") || lower.contains("food") -> "Dining Out"
+                        else -> "General"
+                    }
 
                     streamWords(
-                        "You've spent **$${
-                            String.format(
-                                "%.2f",
-                                coffeeTotal
-                            )
-                        }** across $coffeeVisits coffee visits in October. Before I update your ledger, please confirm the new dinner entry:"
+                        "Please confirm the new **$${String.format("%.2f", parsedAmount)}** **$category** entry before I save it to your ledger:"
                     )
 
                     val insertTool = toolRegistry.getTool("insert_expense")!!
                     val writeArgs = buildJsonObject {
-                        put("amount", 28.00)
-                        put("category", "Dining Out")
-                        put("merchant", "Local Bistro")
-                        put("date", "Yesterday")
+                        put("amount", parsedAmount)
+                        put("category", category)
+                        put("merchant", category)
+                        put("date", "Today")
                     }
                     val preview = insertTool.buildApprovalPreview(writeArgs)!!
 
-                    val approvalDeferred =
-                        CompletableDeferred<Boolean>().also { pendingApprovalDeferred = it }
+                    val approvalDeferred = CompletableDeferred<Boolean>().also { pendingApprovalDeferred = it }
                     send(
                         StreamPipelineEvent.RequestWriteApproval(
                             PendingWriteCardState(
@@ -431,21 +430,28 @@ class ChatViewModel(
                         )
                     )
 
-                    val approved = approvalDeferred.await()
-                    if (approved) {
+                    if (approvalDeferred.await()) {
                         val writeResult = insertTool.execute(writeArgs)
                         val rowId = writeResult.jsonOutput["insertedRowId"]?.jsonPrimitive?.long
                         streamWords(
-                            "\n\nSaved! Logged **$28.00** under **Dining Out** (SQLite Row **#ID-$rowId**). " +
-                                    "Tap the token counter in the top bar to inspect your live database."
+                            "\n\nSaved! Logged **$${String.format("%.2f", parsedAmount)}** under **$category** (SQLite Row **#ID-$rowId**)."
                         )
                     } else {
-                        streamWords("\n\nUnderstood—I discarded the **$28.00** dinner entry and left your database unchanged.")
+                        streamWords("\n\nUnderstood—I discarded the entry and left your database unchanged.")
                     }
+                }
+
+                // 5. Normal conversation / Greetings ("hello", "hi", "what can you do?")
+                else -> {
+                    streamWords(
+                        "Hello! I'm **PocketAgent**, your on-device expense assistant. " +
+                                "You can ask me to check your spending, log a new expense (e.g., *\"Log $14 for coffee\"*), " +
+                                "undo your last entry, or clear the database."
+                    )
                 }
             }
 
-            _uiState.update { it.copy(usedTokens = (it.usedTokens + 180).coerceAtMost(it.maxTokens)) }
+            _uiState.update { it.copy(usedTokens = (it.usedTokens + 95).coerceAtMost(it.maxTokens)) }
             close()
         }
 

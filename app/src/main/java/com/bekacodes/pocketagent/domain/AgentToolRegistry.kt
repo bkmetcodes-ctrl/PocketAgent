@@ -183,6 +183,39 @@ class DeleteLastExpenseTool(private val expenseDao: ExpenseDao) : AgentTool {
     }
 }
 
+/**
+ * Tool 4: Clear Entire Database (Suspends stream and triggers Accept & Save Card)
+ */
+class ClearAllExpensesTool(private val expenseDao: ExpenseDao) : AgentTool {
+    override val name: String = "clear_all_expenses"
+    override val description: String = "Deletes all expense records and clears the entire local database."
+    override val requiresUserApproval: Boolean = true
+
+    override val parametersSchemaJson: String = """{ "type": "object", "properties": {} }"""
+
+    override fun buildApprovalPreview(arguments: JsonObject): PendingWritePreview {
+        return PendingWritePreview(
+            actionBadge = "CLEAR_ALL_EXPENSES",
+            fields = listOf(
+                "Target" to "Entire SQLite Ledger",
+                "Permanent" to "Yes (TRUNCATE TABLE)"
+            )
+        )
+    }
+
+    override suspend fun execute(arguments: JsonObject): ToolExecutionResult {
+        val deletedRows = expenseDao.clearAll()
+        return ToolExecutionResult(
+            signatureDisplay = "clear_all_expenses()",
+            jsonOutput = buildJsonObject {
+                put("status", "CLEARED")
+                put("deletedRowCount", deletedRows)
+            },
+            humanReadableSummary = "Cleared all $deletedRows expense record(s) from the database"
+        )
+    }
+}
+
 class AgentToolRegistry(expenseDao: ExpenseDao) {
     private val tools: Map<String, AgentTool> = listOf(
         GetExpensesTool(expenseDao),

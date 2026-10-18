@@ -145,7 +145,7 @@ fun ChatScreen(
     if (uiState.isInspectorVisible) {
         DatabaseInspectorSheet(
             expenses = uiState.expenses,
-            onResetDemoData = { onIntent(ChatIntent.ResetDemoDatabase) },
+            onClearDatabase = { onIntent(ChatIntent.ClearDatabase) },
             onDismiss = { onIntent(ChatIntent.ToggleInspector(false)) }
         )
     }

@@ -7,11 +7,7 @@ sealed interface ChatIntent {
     data class SendPrompt(val prompt: String) : ChatIntent
     data object StopGeneration : ChatIntent
     data class SwitchEngineMode(val mode: EngineMode) : ChatIntent
-    data class ResolveWriteApproval(
-        val messageId: String,
-        val callId: String,
-        val approved: Boolean
-    ) : ChatIntent
+    data class ResolveWriteApproval(val messageId: String, val callId: String, val approved: Boolean) : ChatIntent
     data class ToggleInspector(val visible: Boolean) : ChatIntent
-    data object ResetDemoDatabase : ChatIntent
+    data object ClearDatabase : ChatIntent
 }
