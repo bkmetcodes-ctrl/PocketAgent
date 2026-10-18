@@ -12,4 +12,6 @@ sealed interface ChatIntent {
         val callId: String,
         val approved: Boolean
     ) : ChatIntent
+    data class ToggleInspector(val visible: Boolean) : ChatIntent
+    data object ResetDemoDatabase : ChatIntent
 }

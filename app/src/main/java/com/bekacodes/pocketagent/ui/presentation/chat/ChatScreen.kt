@@ -20,8 +20,8 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.bekacodes.pocketagent.ui.DatabaseInspectorSheet
 import com.bekacodes.pocketagent.ui.presentation.EngineMode
-import com.bekacodes.pocketagent.ui.presentation.chat.model.MessageStreamStatus
 import com.bekacodes.pocketagent.ui.presentation.chat.components.AgentMessageItem
 import com.bekacodes.pocketagent.ui.presentation.chat.components.ChatBottomBar
 import com.bekacodes.pocketagent.ui.presentation.chat.components.PocketAgentTopBar
@@ -30,6 +30,7 @@ import com.bekacodes.pocketagent.ui.presentation.chat.components.UserMessageBubb
 import com.bekacodes.pocketagent.ui.presentation.chat.model.ChatIntent
 import com.bekacodes.pocketagent.ui.presentation.chat.model.ChatMessageUiModel
 import com.bekacodes.pocketagent.ui.presentation.chat.model.ChatUiState
+import com.bekacodes.pocketagent.ui.presentation.chat.model.MessageStreamStatus
 import com.bekacodes.pocketagent.ui.presentation.chat.model.PendingWriteCardState
 import com.bekacodes.pocketagent.ui.theme.PocketAgentTheme
 
@@ -62,7 +63,8 @@ fun ChatScreen(
                 engineMode = uiState.engineMode,
                 usedTokens = uiState.usedTokens,
                 maxTokens = uiState.maxTokens,
-                onSwitchMode = { onIntent(ChatIntent.SwitchEngineMode(it)) }
+                onSwitchMode = { onIntent(ChatIntent.SwitchEngineMode(it)) },
+                toggleInspector = { onIntent(ChatIntent.ToggleInspector(it)) }
             )
         },
         bottomBar = {
@@ -138,6 +140,14 @@ fun ChatScreen(
                 }
             }
         }
+    }
+
+    if (uiState.isInspectorVisible) {
+        DatabaseInspectorSheet(
+            expenses = uiState.expenses,
+            onResetDemoData = { onIntent(ChatIntent.ResetDemoDatabase) },
+            onDismiss = { onIntent(ChatIntent.ToggleInspector(false)) }
+        )
     }
 }
 

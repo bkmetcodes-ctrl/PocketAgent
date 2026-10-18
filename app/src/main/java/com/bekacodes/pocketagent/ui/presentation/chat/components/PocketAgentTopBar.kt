@@ -28,6 +28,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.bekacodes.pocketagent.ui.presentation.EngineMode
+import com.bekacodes.pocketagent.ui.presentation.chat.model.ChatIntent
 import com.bekacodes.pocketagent.ui.theme.PocketColors
 
 @Composable
@@ -35,7 +36,8 @@ fun PocketAgentTopBar(
     engineMode: EngineMode,
     usedTokens: Int,
     maxTokens: Int,
-    onSwitchMode: (EngineMode) -> Unit
+    onSwitchMode: (EngineMode) -> Unit,
+    toggleInspector:(Boolean) -> Unit
 ) {
     Column(
         modifier = Modifier
@@ -88,7 +90,8 @@ fun PocketAgentTopBar(
             Surface(
                 color = MaterialTheme.colorScheme.surfaceContainer,
                 shape = RoundedCornerShape(10.dp),
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                modifier = Modifier.clickable { toggleInspector(true) }
             ) {
                 Text(
                     text = "${
