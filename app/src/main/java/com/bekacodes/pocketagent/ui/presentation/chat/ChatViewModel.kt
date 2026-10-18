@@ -10,6 +10,8 @@ import com.bekacodes.pocketagent.data.LlmStreamEvent
 import com.bekacodes.pocketagent.data.ResetDemoLedger
 import com.bekacodes.pocketagent.data.seedDemoDataIfEmpty
 import com.bekacodes.pocketagent.domain.AgentToolRegistry
+import com.bekacodes.pocketagent.domain.AuditResult
+import com.bekacodes.pocketagent.domain.ToolCallAuditor
 import com.bekacodes.pocketagent.ui.presentation.ApprovalResolution
 import com.bekacodes.pocketagent.ui.presentation.EngineMode
 import com.bekacodes.pocketagent.ui.presentation.chat.components.ReadToolBadge
@@ -19,11 +21,32 @@ import com.bekacodes.pocketagent.ui.presentation.chat.model.ChatUiState
 import com.bekacodes.pocketagent.ui.presentation.chat.model.MessageStreamStatus
 import com.bekacodes.pocketagent.ui.presentation.chat.model.PendingWriteCardState
 import com.bekacodes.pocketagent.ui.presentation.chat.model.StreamPipelineEvent
-import kotlinx.coroutines.*
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.channels.ProducerScope
 import kotlinx.coroutines.channels.awaitClose
-import kotlinx.coroutines.flow.*
-import kotlinx.serialization.json.*
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.flow.scan
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.double
+import kotlinx.serialization.json.int
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.long
+import kotlinx.serialization.json.put
+import kotlinx.serialization.json.putJsonObject
 import java.util.UUID
 import kotlin.time.measureTimedValue
 
@@ -203,12 +226,15 @@ class ChatViewModel(
                         streamedTextThisHop.append(event.text)
                         send(StreamPipelineEvent.TokenDelta(event.text))
                     }
+
                     is LlmStreamEvent.FunctionCallRequested -> {
                         pendingToolCalls.add(event)
                     }
+
                     is LlmStreamEvent.UsageMetadata -> {
                         _uiState.update { it.copy(usedTokens = event.totalTokens) }
                     }
+
                     is LlmStreamEvent.StreamError -> {
                         send(StreamPipelineEvent.TokenDelta("\n\n⚠️ **Stream Error:** ${event.message}"))
                     }
@@ -218,43 +244,58 @@ class ChatViewModel(
             // 2. If Gemini requested tool execution(s), handle them now
             if (pendingToolCalls.isNotEmpty()) {
                 for (call in pendingToolCalls) {
-                    val tool = toolRegistry.getTool(call.name) ?: continue
+                    when (val audit = ToolCallAuditor.audit(call.name, call.args, toolRegistry)) {
+                        is AuditResult.Rejected -> {
+                            send(StreamPipelineEvent.TokenDelta("\n\n🛡️ **Guardrail Blocked Tool Call:** ${audit.reason}"))
+                            continue
+                        }
 
-                    if (!tool.requiresUserApproval) {
-                        // Read-only tool: execute immediately against Room and show green chip
-                        val tempSig = "${call.name}(${call.args})"
-                        send(StreamPipelineEvent.ReadToolStarted(tempSig))
-                        val timed = measureTimedValue { tool.execute(call.args) }
-                        send(
-                            StreamPipelineEvent.ReadToolCompleted(
-                                signature = tempSig,
-                                durationMs = timed.duration.inWholeMilliseconds.coerceAtLeast(1)
-                            )
-                        )
+                        is AuditResult.Valid -> {
+                            val tool = toolRegistry.getTool(call.name)!!
+                            // Proceed with !tool.requiresUserApproval / write approval card...
 
-                        // Stream a helpful summary of the tool result back to the user
-                        streamWords("\n\n${timed.value.humanReadableSummary}. ")
-                    } else {
-                        // Write tool: build preview card and SUSPEND coroutine until user taps Accept/Reject
-                        val preview = tool.buildApprovalPreview(call.args)!!
-                        val deferred = CompletableDeferred<Boolean>().also { pendingApprovalDeferred = it }
 
-                        send(
-                            StreamPipelineEvent.RequestWriteApproval(
-                                PendingWriteCardState(
-                                    callId = "call_${UUID.randomUUID().toString().take(4)}",
-                                    actionName = preview.actionBadge,
-                                    fields = preview.fields
+                            if (!tool.requiresUserApproval) {
+                                // Read-only tool: execute immediately against Room and show green chip
+                                val tempSig = "${call.name}(${call.args})"
+                                send(StreamPipelineEvent.ReadToolStarted(tempSig))
+                                val timed = measureTimedValue { tool.execute(call.args) }
+                                send(
+                                    StreamPipelineEvent.ReadToolCompleted(
+                                        signature = tempSig,
+                                        durationMs = timed.duration.inWholeMilliseconds.coerceAtLeast(
+                                            1
+                                        )
+                                    )
                                 )
-                            )
-                        )
 
-                        val userApproved = deferred.await()
-                        if (userApproved) {
-                            val result = tool.execute(call.args)
-                            streamWords("\n\nSuccess! ${result.humanReadableSummary}.")
-                        } else {
-                            streamWords("\n\nCancelled—database write was rejected.")
+                                // Stream a helpful summary of the tool result back to the user
+                                streamWords("\n\n${timed.value.humanReadableSummary}. ")
+                            } else {
+                                // Write tool: build preview card and SUSPEND coroutine until user taps Accept/Reject
+                                val preview = tool.buildApprovalPreview(call.args)!!
+                                val deferred = CompletableDeferred<Boolean>().also {
+                                    pendingApprovalDeferred = it
+                                }
+
+                                send(
+                                    StreamPipelineEvent.RequestWriteApproval(
+                                        PendingWriteCardState(
+                                            callId = "call_${UUID.randomUUID().toString().take(4)}",
+                                            actionName = preview.actionBadge,
+                                            fields = preview.fields
+                                        )
+                                    )
+                                )
+
+                                val userApproved = deferred.await()
+                                if (userApproved) {
+                                    val result = tool.execute(call.args)
+                                    streamWords("\n\nSuccess! ${result.humanReadableSummary}.")
+                                } else {
+                                    streamWords("\n\nCancelled—database write was rejected.")
+                                }
+                            }
                         }
                     }
                 }
