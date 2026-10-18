@@ -27,17 +27,20 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.bekacodes.pocketagent.ui.presentation.EngineMode
-import com.bekacodes.pocketagent.ui.presentation.chat.model.ChatIntent
+import com.bekacodes.pocketagent.ui.presentation.chat.model.EngineMode
 import com.bekacodes.pocketagent.ui.theme.PocketColors
+import java.util.Locale
 
+/**
+ * Top App Bar component featuring title, Engine Mode toggle switch, and live token usage badge.
+ */
 @Composable
 fun PocketAgentTopBar(
     engineMode: EngineMode,
     usedTokens: Int,
     maxTokens: Int,
     onSwitchMode: (EngineMode) -> Unit,
-    toggleInspector:(Boolean) -> Unit
+    toggleInspector: (Boolean) -> Unit
 ) {
     Column(
         modifier = Modifier
@@ -96,7 +99,7 @@ fun PocketAgentTopBar(
                 Text(
                     text = "${
                         String.format(
-                            java.util.Locale.getDefault(),
+                            Locale.US,
                             "%.1f",
                             usedTokens / 1000f
                         )

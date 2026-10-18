@@ -2,8 +2,10 @@ package com.bekacodes.pocketagent.ui.presentation.chat.model
 
 import androidx.compose.runtime.Immutable
 import com.bekacodes.pocketagent.data.ExpenseEntity
-import com.bekacodes.pocketagent.ui.presentation.EngineMode
 
+/**
+ * Immutable StateFlow state representing the entire Chat screen UI.
+ */
 @Immutable
 data class ChatUiState(
     val engineMode: EngineMode = EngineMode.DEMO_SIM,

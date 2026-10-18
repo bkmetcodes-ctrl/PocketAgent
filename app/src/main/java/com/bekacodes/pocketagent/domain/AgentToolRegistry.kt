@@ -1,6 +1,6 @@
 package com.bekacodes.pocketagent.domain
 
-
+import androidx.compose.runtime.Immutable
 import com.bekacodes.pocketagent.data.ExpenseDao
 import com.bekacodes.pocketagent.data.ExpenseEntity
 import kotlinx.serialization.json.JsonObject
@@ -9,12 +9,21 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
+import java.util.Locale
 
+/**
+ * Preview state passed to Jetpack Compose approval card prior to executing mutating writes.
+ */
+@Immutable
 data class PendingWritePreview(
     val actionBadge: String,               // e.g., "INSERT_EXPENSE"
     val fields: List<Pair<String, String>> // Key-value rows for the Compose Approval Card
 )
 
+/**
+ * Encapsulates the output of an [AgentTool] execution.
+ */
+@Immutable
 data class ToolExecutionResult(
     val signatureDisplay: String,          // e.g., "get_expenses(category='Coffee')"
     val jsonOutput: JsonObject,            // Structured JSON fed back to the LLM
@@ -22,7 +31,7 @@ data class ToolExecutionResult(
 )
 
 /**
- * Core MCP (Model Context Protocol) contract for on-device Android tools.
+ * Core Model Context Protocol (MCP) tool contract for on-device Android agents.
  */
 interface AgentTool {
     val name: String
@@ -30,12 +39,19 @@ interface AgentTool {
     val parametersSchemaJson: String
     val requiresUserApproval: Boolean
 
+    /**
+     * Constructs a human-readable preview card model if the tool requires approval.
+     */
     fun buildApprovalPreview(arguments: JsonObject): PendingWritePreview? = null
+
+    /**
+     * Executes the underlying business logic on the local database or domain layer.
+     */
     suspend fun execute(arguments: JsonObject): ToolExecutionResult
 }
 
 /**
- * Tool 1: Read-Only Expense Query (Executes automatically mid-stream)
+ * Tool 1: Read-Only Expense Query (Executes automatically mid-stream without user approval).
  */
 class GetExpensesTool(private val expenseDao: ExpenseDao) : AgentTool {
     override val name: String = "get_expenses"
@@ -53,7 +69,7 @@ class GetExpensesTool(private val expenseDao: ExpenseDao) : AgentTool {
     """.trimIndent()
 
     override suspend fun execute(arguments: JsonObject): ToolExecutionResult {
-        val category = arguments["category"]?.jsonPrimitive?.contentOrNull
+        val category = arguments["category"]?.jsonPrimitive?.contentOrNull?.trim()
         val rows = if (!category.isNullOrBlank()) {
             expenseDao.getExpensesByCategory(category)
         } else {
@@ -63,7 +79,7 @@ class GetExpensesTool(private val expenseDao: ExpenseDao) : AgentTool {
         val total = rows.sumOf { it.amount }
         val count = rows.size
         val signature =
-            if (category != null) "get_expenses(category='$category')" else "get_expenses()"
+            if (!category.isNullOrBlank()) "get_expenses(category='$category')" else "get_expenses()"
 
         val resultJson = buildJsonObject {
             put("category", category ?: "All")
@@ -74,13 +90,13 @@ class GetExpensesTool(private val expenseDao: ExpenseDao) : AgentTool {
         return ToolExecutionResult(
             signatureDisplay = signature,
             jsonOutput = resultJson,
-            humanReadableSummary = "Found $count visits totaling $${String.format("%.2f", total)}"
+            humanReadableSummary = "Found $count record(s) totaling $${String.format(Locale.US, "%.2f", total)}"
         )
     }
 }
 
 /**
- * Tool 2: Mutating Database Insert (Suspends stream and triggers Accept & Save Card)
+ * Tool 2: Mutating Database Insert (Suspends stream and requires explicit user approval).
  */
 class InsertExpenseTool(private val expenseDao: ExpenseDao) : AgentTool {
     override val name: String = "insert_expense"
@@ -109,7 +125,7 @@ class InsertExpenseTool(private val expenseDao: ExpenseDao) : AgentTool {
         return PendingWritePreview(
             actionBadge = "INSERT_EXPENSE",
             fields = listOf(
-                "Amount" to "$${String.format("%.2f", amount)}",
+                "Amount" to "$${String.format(Locale.US, "%.2f", amount)}",
                 "Category" to category,
                 "Date" to date
             )
@@ -142,6 +158,7 @@ class InsertExpenseTool(private val expenseDao: ExpenseDao) : AgentTool {
             },
             humanReadableSummary = "Inserted row #$rowId ($${
                 String.format(
+                    Locale.US,
                     "%.2f",
                     amount
                 )
@@ -151,7 +168,7 @@ class InsertExpenseTool(private val expenseDao: ExpenseDao) : AgentTool {
 }
 
 /**
- * Tool 3: Undo / Delete Last Entry (Suspends stream and triggers Accept & Save Card)
+ * Tool 3: Undo / Delete Most Recent Expense Entry.
  */
 class DeleteLastExpenseTool(private val expenseDao: ExpenseDao) : AgentTool {
     override val name: String = "delete_last_expense"
@@ -184,7 +201,7 @@ class DeleteLastExpenseTool(private val expenseDao: ExpenseDao) : AgentTool {
 }
 
 /**
- * Tool 4: Clear Entire Database (Suspends stream and triggers Accept & Save Card)
+ * Tool 4: Clear Entire SQLite Database.
  */
 class ClearAllExpensesTool(private val expenseDao: ExpenseDao) : AgentTool {
     override val name: String = "clear_all_expenses"
@@ -216,11 +233,15 @@ class ClearAllExpensesTool(private val expenseDao: ExpenseDao) : AgentTool {
     }
 }
 
+/**
+ * Registry containing all available [AgentTool] instances available to PocketAgent.
+ */
 class AgentToolRegistry(expenseDao: ExpenseDao) {
     private val tools: Map<String, AgentTool> = listOf(
         GetExpensesTool(expenseDao),
         InsertExpenseTool(expenseDao),
-        DeleteLastExpenseTool(expenseDao)
+        DeleteLastExpenseTool(expenseDao),
+        ClearAllExpensesTool(expenseDao)
     ).associateBy { it.name }
 
     fun getTool(name: String): AgentTool? = tools[name]

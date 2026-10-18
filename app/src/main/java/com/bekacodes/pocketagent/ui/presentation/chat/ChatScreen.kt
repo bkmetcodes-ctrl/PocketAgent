@@ -14,6 +14,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
@@ -21,7 +22,6 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.bekacodes.pocketagent.ui.DatabaseInspectorSheet
-import com.bekacodes.pocketagent.ui.presentation.EngineMode
 import com.bekacodes.pocketagent.ui.presentation.chat.components.AgentMessageItem
 import com.bekacodes.pocketagent.ui.presentation.chat.components.ChatBottomBar
 import com.bekacodes.pocketagent.ui.presentation.chat.components.PocketAgentTopBar
@@ -30,10 +30,14 @@ import com.bekacodes.pocketagent.ui.presentation.chat.components.UserMessageBubb
 import com.bekacodes.pocketagent.ui.presentation.chat.model.ChatIntent
 import com.bekacodes.pocketagent.ui.presentation.chat.model.ChatMessageUiModel
 import com.bekacodes.pocketagent.ui.presentation.chat.model.ChatUiState
+import com.bekacodes.pocketagent.ui.presentation.chat.model.EngineMode
 import com.bekacodes.pocketagent.ui.presentation.chat.model.MessageStreamStatus
 import com.bekacodes.pocketagent.ui.presentation.chat.model.PendingWriteCardState
 import com.bekacodes.pocketagent.ui.theme.PocketAgentTheme
 
+/**
+ * Main Chat Screen composable rendering conversation turns, top navigation, and bottom prompt bar.
+ */
 @Composable
 fun ChatScreen(
     uiState: ChatUiState,
@@ -42,16 +46,19 @@ fun ChatScreen(
 ) {
     val listState = rememberLazyListState()
 
-    // Auto-scroll to the bottom as new tokens or cards stream in
-    val latestMessageContent = uiState.messages.lastOrNull()?.let { msg ->
-        when (msg) {
-            is ChatMessageUiModel.UserMessage -> msg.text
-            is ChatMessageUiModel.AgentMessage -> "${msg.markdownText}_${msg.pendingWriteApproval?.resolution}_${msg.status}"
+    // Memoize scroll trigger based on message count and last message content
+    val latestMessageContent = remember(uiState.messages) {
+        uiState.messages.lastOrNull()?.let { msg ->
+            when (msg) {
+                is ChatMessageUiModel.UserMessage -> msg.text
+                is ChatMessageUiModel.AgentMessage -> "${msg.markdownText}_${msg.pendingWriteApproval?.resolution}_${msg.status}"
+            }
         }
     }
+
     LaunchedEffect(uiState.messages.size, latestMessageContent) {
         if (uiState.messages.isNotEmpty()) {
-            listState.animateScrollToItem(uiState.messages.lastIndex + 1) // +1 accounts for date header
+            listState.animateScrollToItem(uiState.messages.lastIndex + 1)
         }
     }
 
@@ -92,7 +99,7 @@ fun ChatScreen(
             verticalArrangement = Arrangement.spacedBy(20.dp),
             contentPadding = PaddingValues(vertical = 16.dp)
         ) {
-            item(key = "date_header") {
+            item(key = "date_header", contentType = { "date_header" }) {
                 Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
                     Text(
                         text = "TODAY  ·  9:41 AM",
@@ -150,7 +157,6 @@ fun ChatScreen(
         )
     }
 }
-
 
 @Preview(showBackground = true, widthDp = 412, heightDp = 917)
 @Composable

@@ -1,11 +1,26 @@
 package com.bekacodes.pocketagent.ui
 
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.*
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -15,7 +30,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.bekacodes.pocketagent.data.ExpenseEntity
 import com.bekacodes.pocketagent.ui.theme.PocketColors
+import java.util.Locale
 
+/**
+ * Modal Bottom Sheet enabling developers to inspect local Room SQLite database rows in real time.
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DatabaseInspectorSheet(
@@ -98,7 +117,11 @@ fun DatabaseInspectorSheet(
                     modifier = Modifier.heightIn(max = 420.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    items(items = expenses, key = { it.id }) { item ->
+                    items(
+                        items = expenses,
+                        key = { it.id },
+                        contentType = { "expense_entity" }
+                    ) { item ->
                         Surface(
                             color = MaterialTheme.colorScheme.surfaceContainer,
                             shape = RoundedCornerShape(12.dp),
@@ -155,7 +178,7 @@ fun DatabaseInspectorSheet(
                                 }
 
                                 Text(
-                                    text = "$${String.format("%.2f", item.amount)}",
+                                    text = "$${String.format(Locale.US, "%.2f", item.amount)}",
                                     color = if (item.addedByAgent) PocketColors.EmeraldSoft else PocketColors.TextPrimary,
                                     fontSize = 15.sp,
                                     fontFamily = FontFamily.Monospace,

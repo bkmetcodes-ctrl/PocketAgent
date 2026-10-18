@@ -1,8 +1,10 @@
 package com.bekacodes.pocketagent.ui.presentation.chat.model
 
 import androidx.compose.runtime.Immutable
-import com.bekacodes.pocketagent.ui.presentation.ApprovalResolution
 
+/**
+ * State model for the pending write approval card in agent messages.
+ */
 @Immutable
 data class PendingWriteCardState(
     val callId: String,

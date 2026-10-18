@@ -1,3 +1,10 @@
-package com.bekacodes.pocketagent.ui.presentation
+package com.bekacodes.pocketagent.ui.presentation.chat.model
 
-enum class ApprovalResolution { PENDING, APPROVED, REJECTED }
+/**
+ * Resolution status of a pending database write approval card.
+ */
+enum class ApprovalResolution {
+    PENDING,
+    APPROVED,
+    REJECTED
+}

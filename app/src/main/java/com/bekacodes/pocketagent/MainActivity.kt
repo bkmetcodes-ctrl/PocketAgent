@@ -13,6 +13,10 @@ import com.bekacodes.pocketagent.ui.presentation.chat.ChatScreen
 import com.bekacodes.pocketagent.ui.presentation.chat.ChatViewModel
 import com.bekacodes.pocketagent.ui.theme.PocketAgentTheme
 
+/**
+ * Single Activity entry point for PocketAgent. Initializes local Room database and delegates
+ * MVI state flows to Jetpack Compose UI components.
+ */
 class MainActivity : ComponentActivity() {
 
     private val database by lazy { PocketDatabase.getInstance(applicationContext) }

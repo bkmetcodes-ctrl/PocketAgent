@@ -4,9 +4,9 @@ import com.bekacodes.pocketagent.data.ExpenseDao
 import com.bekacodes.pocketagent.data.ExpenseEntity
 import com.bekacodes.pocketagent.data.GeminiSseClient
 import com.bekacodes.pocketagent.domain.AgentToolRegistry
-import com.bekacodes.pocketagent.ui.presentation.EngineMode
 import com.bekacodes.pocketagent.ui.presentation.chat.model.ChatIntent
 import com.bekacodes.pocketagent.ui.presentation.chat.model.ChatMessageUiModel
+import com.bekacodes.pocketagent.ui.presentation.chat.model.EngineMode
 import com.bekacodes.pocketagent.ui.presentation.chat.model.MessageStreamStatus
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -48,6 +48,12 @@ class FakeExpenseDao : ExpenseDao {
     private val expensesList = mutableListOf<ExpenseEntity>()
     private val expensesFlow = MutableStateFlow<List<ExpenseEntity>>(emptyList())
 
+    fun seedData(items: List<ExpenseEntity>) {
+        expensesList.clear()
+        expensesList.addAll(items)
+        expensesFlow.value = expensesList.toList()
+    }
+
     override fun observeAllExpenses(): Flow<List<ExpenseEntity>> = expensesFlow
 
     override suspend fun getExpensesByCategory(category: String): List<ExpenseEntity> {
@@ -76,9 +82,11 @@ class FakeExpenseDao : ExpenseDao {
         }
     }
 
-    override suspend fun clearAll() {
+    override suspend fun clearAll(): Int {
+        val count = expensesList.size
         expensesList.clear()
         expensesFlow.value = emptyList()
+        return count
     }
 
     override suspend fun count(): Int {
@@ -116,22 +124,30 @@ class ChatViewModelTest {
     @Before
     fun setUp() {
         fakeExpenseDao = FakeExpenseDao()
+        // Seed 11 sample records for testing
+        val sampleExpenses = (1..11).map { index ->
+            ExpenseEntity(
+                id = index.toLong(),
+                amount = 4.50 + index,
+                category = if (index % 2 == 0) "Coffee" else "Dining Out",
+                merchant = "Merchant #$index",
+                dateLabel = "Today"
+            )
+        }
+        fakeExpenseDao.seedData(sampleExpenses)
+
         toolRegistry = AgentToolRegistry(fakeExpenseDao)
         geminiSseClient = GeminiSseClient("")
         viewModel = ChatViewModel(fakeExpenseDao, toolRegistry, geminiSseClient)
     }
 
     @Test
-    fun initialization_seedsDemoDataAndObservesExpenses() = runTest {
+    fun initialization_observesExpensesFromDao() = runTest {
         viewModel.uiState.waitUntil { it.expenses.isNotEmpty() }
 
         val state = viewModel.uiState.value
-        assertTrue("Expenses should be seeded on init", state.expenses.isNotEmpty())
+        assertTrue("Expenses should be observed from DAO on init", state.expenses.isNotEmpty())
         assertEquals(11, state.expenses.size)
-
-        assertTrue("Messages list should contain user prompt and agent response", state.messages.size >= 2)
-        assertTrue(state.messages[0] is ChatMessageUiModel.UserMessage)
-        assertTrue(state.messages[1] is ChatMessageUiModel.AgentMessage)
     }
 
     @Test
@@ -161,17 +177,13 @@ class ChatViewModelTest {
     }
 
     @Test
-    fun onIntent_ResetDemoDatabase_clearsAndReseedsDatabase() = runTest {
+    fun onIntent_ClearDatabase_clearsAllExpensesFromDatabase() = runTest {
         viewModel.uiState.waitUntil { it.expenses.size == 11 }
 
-        fakeExpenseDao.clearAll()
+        viewModel.onIntent(ChatIntent.ClearDatabase)
         viewModel.uiState.waitUntil { it.expenses.isEmpty() }
+
         assertEquals(0, viewModel.uiState.value.expenses.size)
-
-        viewModel.onIntent(ChatIntent.ResetDemoDatabase)
-        viewModel.uiState.waitUntil { it.expenses.size == 11 }
-
-        assertEquals(11, viewModel.uiState.value.expenses.size)
     }
 
     @Test

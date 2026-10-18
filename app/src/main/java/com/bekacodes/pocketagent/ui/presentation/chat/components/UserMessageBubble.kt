@@ -15,6 +15,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.bekacodes.pocketagent.ui.presentation.chat.model.ChatMessageUiModel
 
+/**
+ * Bubble component rendering user messages in the chat stream.
+ */
 @Composable
 fun UserMessageBubble(message: ChatMessageUiModel.UserMessage) {
     Box(

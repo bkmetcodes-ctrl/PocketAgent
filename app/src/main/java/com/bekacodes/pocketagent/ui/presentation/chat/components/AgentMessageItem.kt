@@ -38,12 +38,15 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.bekacodes.pocketagent.ui.presentation.ApprovalResolution
-import com.bekacodes.pocketagent.ui.presentation.chat.model.MessageStreamStatus
+import com.bekacodes.pocketagent.ui.presentation.chat.model.ApprovalResolution
 import com.bekacodes.pocketagent.ui.presentation.chat.model.ChatMessageUiModel
+import com.bekacodes.pocketagent.ui.presentation.chat.model.MessageStreamStatus
 import com.bekacodes.pocketagent.ui.presentation.chat.model.PendingWriteCardState
 import com.bekacodes.pocketagent.ui.theme.PocketColors
 
+/**
+ * Item component rendering Agent messages, executed tool badges, parsed markdown, and pending approval cards.
+ */
 @Composable
 fun AgentMessageItem(
     message: ChatMessageUiModel.AgentMessage,

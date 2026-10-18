@@ -40,6 +40,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.bekacodes.pocketagent.ui.theme.PocketColors
 
+/**
+ * Bottom Bar component containing quick action suggestion pills, text entry field, and animated send/stop action button.
+ */
 @Composable
 fun ChatBottomBar(
     inputText: String,

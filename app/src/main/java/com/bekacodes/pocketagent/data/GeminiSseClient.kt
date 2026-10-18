@@ -1,12 +1,12 @@
 package com.bekacodes.pocketagent.data
 
 import com.bekacodes.pocketagent.domain.AgentTool
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonArray
-import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.addJsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
@@ -27,19 +27,28 @@ import okhttp3.sse.EventSourceListener
 import okhttp3.sse.EventSources
 import java.util.concurrent.TimeUnit
 
+/**
+ * Thread-safe client that streams Gemini turn responses over Server-Sent Events (SSE).
+ *
+ * Emits incremental [LlmStreamEvent] instances. Cancelling the collecting coroutine
+ * deterministically aborts the underlying HTTP SSE socket via [awaitClose].
+ *
+ * @param apiKey Gemini REST API key.
+ * @param okHttpClient Shared or custom OkHttpClient instance configured with appropriate timeouts.
+ */
 class GeminiSseClient(
-    private val apiKey: String
+    private val apiKey: String,
+    private val okHttpClient: OkHttpClient = OkHttpClient.Builder()
+        .connectTimeout(15, TimeUnit.SECONDS)
+        .readTimeout(60, TimeUnit.SECONDS)
+        .writeTimeout(15, TimeUnit.SECONDS)
+        .build()
 ) {
     private val json = Json { ignoreUnknownKeys = true }
 
-    private val okHttpClient = OkHttpClient.Builder()
-        .connectTimeout(15, TimeUnit.SECONDS)
-        .readTimeout(60, TimeUnit.SECONDS)
-        .build()
-
     /**
      * Streams a single Gemini turn over Server-Sent Events (SSE).
-     * Cancelling the collecting coroutine immediately aborts the underlying HTTP socket.
+     * Automatically dispatches network I/O on [Dispatchers.IO].
      */
     fun streamTurn(
         prompt: String,
@@ -48,7 +57,7 @@ class GeminiSseClient(
         if (apiKey.isBlank()) {
             trySend(
                 LlmStreamEvent.StreamError(
-                    "Missing GEMINI_API_KEY in local.properties. Switch to 'Demo Sim' or add your free key."
+                    "Missing GEMINI_API_KEY in local.properties. Switch to 'Demo Sim' or add your API key."
                 )
             )
             close()
@@ -98,12 +107,18 @@ class GeminiSseClient(
         val url =
             "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:streamGenerateContent?alt=sse&key=$apiKey"
 
-        val request = Request.Builder()
-            .url(url)
-            .addHeader("Content-Type", "application/json")
-            .addHeader("Accept", "text/event-stream")
-            .post(requestPayload.toString().toRequestBody("application/json".toMediaType()))
-            .build()
+        val request = try {
+            Request.Builder()
+                .url(url)
+                .addHeader("Content-Type", "application/json")
+                .addHeader("Accept", "text/event-stream")
+                .post(requestPayload.toString().toRequestBody("application/json".toMediaType()))
+                .build()
+        } catch (e: Exception) {
+            trySend(LlmStreamEvent.StreamError("Request construction failed: ${e.localizedMessage}"))
+            close()
+            return@callbackFlow
+        }
 
         val listener = object : EventSourceListener() {
             override fun onEvent(
@@ -139,6 +154,8 @@ class GeminiSseClient(
                             trySend(LlmStreamEvent.FunctionCallRequested(fnName, fnArgs))
                         }
                     }
+                }.onFailure { t ->
+                    trySend(LlmStreamEvent.StreamError("Event parsing error: ${t.localizedMessage}"))
                 }
             }
 
@@ -147,56 +164,22 @@ class GeminiSseClient(
             }
 
             override fun onFailure(eventSource: EventSource, t: Throwable?, response: Response?) {
-                val errorBody = response?.body?.string()?.take(200)
-                val msg =
-                    t?.localizedMessage ?: "HTTP ${response?.code}: ${errorBody ?: "Stream failed"}"
+                val errorBody = try {
+                    response?.body?.use { it.string().take(200) }
+                } catch (_: Exception) {
+                    null
+                }
+                val msg = t?.localizedMessage
+                    ?: "HTTP ${response?.code ?: "Unknown"}: ${errorBody ?: "Stream failed"}"
                 trySend(LlmStreamEvent.StreamError(msg))
                 close()
             }
         }
 
         val eventSource = EventSources.createFactory(okHttpClient).newEventSource(request, listener)
-        awaitClose { eventSource.cancel() }
-    }
 
-    private fun buildRequestJson(
-        contentsHistory: JsonArray,
-        tools: List<AgentTool>
-    ): JsonObject = buildJsonObject {
-        putJsonObject("systemInstruction") {
-            putJsonArray("parts") {
-                addJsonObject {
-                    put(
-                        "text",
-                        "You are PocketAgent, an on-device financial assistant connected to a local SQLite database. " +
-                                "Always use `get_expenses` to check real figures before answering spending questions. " +
-                                "Use `insert_expense` to log new expenses and `delete_last_expense` to undo/delete the last entry. " +
-                                "Format dollar amounts in bold like **$42.50**. Keep responses concise (1-3 sentences)." +
-                                "Use clear_all_expenses when the user asks to clear or wipe the entire database."
-                    )
-                }
-            }
+        awaitClose {
+            eventSource.cancel()
         }
-
-        put("contents", contentsHistory)
-
-        if (tools.isNotEmpty()) {
-            putJsonArray("tools") {
-                addJsonObject {
-                    putJsonArray("functionDeclarations") {
-                        tools.forEach { tool ->
-                            addJsonObject {
-                                put("name", tool.name)
-                                put("description", tool.description)
-                                put(
-                                    "parameters",
-                                    json.parseToJsonElement(tool.parametersSchemaJson)
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
+    }.flowOn(Dispatchers.IO)
 }

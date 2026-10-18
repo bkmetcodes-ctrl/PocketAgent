@@ -9,13 +9,14 @@ import com.bekacodes.pocketagent.data.GeminiSseClient
 import com.bekacodes.pocketagent.data.LlmStreamEvent
 import com.bekacodes.pocketagent.domain.AgentToolRegistry
 import com.bekacodes.pocketagent.domain.AuditResult
+import com.bekacodes.pocketagent.domain.ContextWindowManager
 import com.bekacodes.pocketagent.domain.ToolCallAuditor
-import com.bekacodes.pocketagent.ui.presentation.ApprovalResolution
-import com.bekacodes.pocketagent.ui.presentation.EngineMode
 import com.bekacodes.pocketagent.ui.presentation.chat.components.ReadToolBadge
+import com.bekacodes.pocketagent.ui.presentation.chat.model.ApprovalResolution
 import com.bekacodes.pocketagent.ui.presentation.chat.model.ChatIntent
 import com.bekacodes.pocketagent.ui.presentation.chat.model.ChatMessageUiModel
 import com.bekacodes.pocketagent.ui.presentation.chat.model.ChatUiState
+import com.bekacodes.pocketagent.ui.presentation.chat.model.EngineMode
 import com.bekacodes.pocketagent.ui.presentation.chat.model.MessageStreamStatus
 import com.bekacodes.pocketagent.ui.presentation.chat.model.PendingWriteCardState
 import com.bekacodes.pocketagent.ui.presentation.chat.model.StreamPipelineEvent
@@ -37,26 +38,28 @@ import kotlinx.coroutines.flow.scan
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.double
 import kotlinx.serialization.json.int
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.long
 import kotlinx.serialization.json.put
-import kotlinx.serialization.json.putJsonObject
+import java.util.Locale
 import java.util.UUID
 import kotlin.time.measureTimedValue
 
+/**
+ * MVI ViewModel managing PocketAgent chat UI state, Gemini SSE streaming, tool executions, and room database observing.
+ */
 class ChatViewModel(
     private val expenseDao: ExpenseDao,
     private val toolRegistry: AgentToolRegistry,
-    private val geminiSseClient: GeminiSseClient = GeminiSseClient(BuildConfig.GEMINI_API_KEY)
+    private val geminiSseClient: GeminiSseClient = GeminiSseClient(BuildConfig.GEMINI_API_KEY),
+    private val contextWindowManager: ContextWindowManager = ContextWindowManager()
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(
         ChatUiState(
-            // Automatically default to GEMINI_LIVE if an API key is configured!
             engineMode = if (BuildConfig.GEMINI_API_KEY.isNotBlank()) EngineMode.GEMINI_LIVE else EngineMode.DEMO_SIM
         )
     )
@@ -64,9 +67,6 @@ class ChatViewModel(
 
     private var activeGenerationJob: Job? = null
     private var pendingApprovalDeferred: CompletableDeferred<Boolean>? = null
-
-    // Maintains rolling multi-turn conversation history for Gemini Live mode
-    private val conversationHistory = mutableListOf<JsonObject>()
 
     init {
         viewModelScope.launch {
@@ -76,6 +76,9 @@ class ChatViewModel(
         }
     }
 
+    /**
+     * Handles MVI user intents dispatched from the UI layer.
+     */
     fun onIntent(intent: ChatIntent) {
         when (intent) {
             is ChatIntent.UpdateInput -> _uiState.update { it.copy(inputText = intent.text) }
@@ -83,22 +86,27 @@ class ChatViewModel(
             is ChatIntent.ToggleInspector -> _uiState.update { it.copy(isInspectorVisible = intent.visible) }
             is ChatIntent.ClearDatabase -> {
                 viewModelScope.launch {
-                    expenseDao.clearAll()
+                    withContext(NonCancellable + Dispatchers.IO) {
+                        expenseDao.clearAll()
+                    }
                 }
             }
             is ChatIntent.SendPrompt -> startStreamingTurn(intent.prompt)
-            is ChatIntent.StopGeneration -> {
-                activeGenerationJob?.cancel()
-                pendingApprovalDeferred?.cancel()
-            }
+            is ChatIntent.StopGeneration -> stopGenerationInternal()
             is ChatIntent.ResolveWriteApproval -> {
                 resolveWriteApproval(intent.messageId, intent.approved)
             }
         }
     }
 
-    private fun startStreamingTurn(prompt: String) {
+    private fun stopGenerationInternal() {
         activeGenerationJob?.cancel()
+        pendingApprovalDeferred?.cancel()
+        pendingApprovalDeferred = null
+    }
+
+    private fun startStreamingTurn(prompt: String) {
+        stopGenerationInternal()
 
         val userMsgId = UUID.randomUUID().toString()
         val agentMsgId = UUID.randomUUID().toString()
@@ -114,11 +122,16 @@ class ChatViewModel(
             status = MessageStreamStatus.Streaming
         )
 
+        val updatedMessages = _uiState.value.messages + userMessage + initialAgentMessage
+        val trimmedMessages = contextWindowManager.trimToFitBudget(updatedMessages)
+        val estimatedTokens = contextWindowManager.estimateTotalTokens(trimmedMessages)
+
         _uiState.update { state ->
             state.copy(
                 inputText = "",
                 isGenerating = true,
-                messages = state.messages + userMessage + initialAgentMessage
+                usedTokens = estimatedTokens,
+                messages = trimmedMessages
             )
         }
 
@@ -126,7 +139,7 @@ class ChatViewModel(
             try {
                 val mode = _uiState.value.engineMode
                 val stream = if (mode == EngineMode.GEMINI_LIVE) {
-                    orchestrateLiveGeminiTurn(prompt, agentMsgId)
+                    orchestrateLiveGeminiTurn(prompt)
                 } else {
                     orchestrateDemoSimTurn(prompt, agentMsgId)
                 }
@@ -176,7 +189,12 @@ class ChatViewModel(
                 throw e
             } finally {
                 withContext(NonCancellable) {
-                    _uiState.update { it.copy(isGenerating = false) }
+                    _uiState.update { state ->
+                        state.copy(
+                            isGenerating = false,
+                            usedTokens = contextWindowManager.estimateTotalTokens(state.messages)
+                        )
+                    }
                 }
             }
         }
@@ -199,14 +217,12 @@ class ChatViewModel(
      * write tools for user approval, and streams the final response.
      */
     private fun orchestrateLiveGeminiTurn(
-        prompt: String,
-        agentMsgId: String
+        prompt: String
     ): Flow<StreamPipelineEvent> = callbackFlow {
         val job = launch {
             val pendingToolCalls = mutableListOf<LlmStreamEvent.FunctionCallRequested>()
             val streamedTextThisHop = StringBuilder()
 
-            // 1. Stream initial response from Gemini using the streamlined single-turn method
             geminiSseClient.streamTurn(
                 prompt = prompt,
                 tools = toolRegistry.allTools()
@@ -231,7 +247,6 @@ class ChatViewModel(
                 }
             }
 
-            // 2. If Gemini requested tool execution(s), handle them now
             if (pendingToolCalls.isNotEmpty()) {
                 for (call in pendingToolCalls) {
                     when (val audit = ToolCallAuditor.audit(call.name, call.args, toolRegistry)) {
@@ -242,28 +257,21 @@ class ChatViewModel(
 
                         is AuditResult.Valid -> {
                             val tool = toolRegistry.getTool(call.name)!!
-                            // Proceed with !tool.requiresUserApproval / write approval card...
-
 
                             if (!tool.requiresUserApproval) {
-                                // Read-only tool: execute immediately against Room and show green chip
                                 val tempSig = "${call.name}(${call.args})"
                                 send(StreamPipelineEvent.ReadToolStarted(tempSig))
-                                val timed = measureTimedValue { tool.execute(call.args) }
+                                val timed = measureTimedValue { tool.execute(audit.sanitizedArgs) }
                                 send(
                                     StreamPipelineEvent.ReadToolCompleted(
                                         signature = tempSig,
-                                        durationMs = timed.duration.inWholeMilliseconds.coerceAtLeast(
-                                            1
-                                        )
+                                        durationMs = timed.duration.inWholeMilliseconds.coerceAtLeast(1)
                                     )
                                 )
 
-                                // Stream a helpful summary of the tool result back to the user
                                 streamWords("\n\n${timed.value.humanReadableSummary}. ")
                             } else {
-                                // Write tool: build preview card and SUSPEND coroutine until user taps Accept/Reject
-                                val preview = tool.buildApprovalPreview(call.args)!!
+                                val preview = tool.buildApprovalPreview(audit.sanitizedArgs)!!
                                 val deferred = CompletableDeferred<Boolean>().also {
                                     pendingApprovalDeferred = it
                                 }
@@ -280,7 +288,9 @@ class ChatViewModel(
 
                                 val userApproved = deferred.await()
                                 if (userApproved) {
-                                    val result = tool.execute(call.args)
+                                    val result = withContext(NonCancellable) {
+                                        tool.execute(audit.sanitizedArgs)
+                                    }
                                     streamWords("\n\nSuccess! ${result.humanReadableSummary}.")
                                 } else {
                                     streamWords("\n\nCancelled—database write was rejected.")
@@ -297,14 +307,6 @@ class ChatViewModel(
         awaitClose { job.cancel() }
     }
 
-    private fun buildFunctionResponsePart(name: String, response: JsonObject): JsonObject =
-        buildJsonObject {
-            putJsonObject("functionResponse") {
-                put("name", name)
-                put("response", response)
-            }
-        }
-
     /**
      * DEMO SIMULATOR ORCHESTRATOR (Offline fallback when Demo Sim pill is selected)
      */
@@ -312,7 +314,6 @@ class ChatViewModel(
         val job = launch {
             val lower = prompt.lowercase().trim()
 
-            // Only extract an amount if the user actually typed a number
             val parsedAmount = Regex("""\$?(\d+(\.\d{1,2})?)""")
                 .find(prompt)
                 ?.groupValues?.get(1)
@@ -339,7 +340,9 @@ class ChatViewModel(
                     )
 
                     if (deferred.await()) {
-                        val result = clearTool.execute(args)
+                        val result = withContext(NonCancellable) {
+                            clearTool.execute(args)
+                        }
                         streamWords("\n\nDone! ${result.humanReadableSummary}.")
                     } else {
                         streamWords("\n\nCancelled—your database records were kept.")
@@ -366,7 +369,9 @@ class ChatViewModel(
                     )
 
                     if (deferred.await()) {
-                        val result = deleteTool.execute(args)
+                        val result = withContext(NonCancellable) {
+                            deleteTool.execute(args)
+                        }
                         streamWords("\n\nDone! ${result.humanReadableSummary} from your local Room database.")
                     } else {
                         streamWords("\n\nCancelled—your most recent expense entry was kept.")
@@ -391,12 +396,12 @@ class ChatViewModel(
                     } else {
                         streamWords(
                             "Across **$count** recorded transactions in your local SQLite ledger, " +
-                                    "your total spending is **$${String.format("%.2f", total)}**."
+                                    "your total spending is **$${String.format(Locale.US, "%.2f", total)}**."
                         )
                     }
                 }
 
-                // 4. Log an expense — ONLY if the user actually provided a number in their prompt
+                // 4. Log an expense
                 parsedAmount != null -> {
                     val category = when {
                         lower.contains("coffee") || lower.contains("cafe") -> "Coffee"
@@ -407,7 +412,7 @@ class ChatViewModel(
                     }
 
                     streamWords(
-                        "Please confirm the new **$${String.format("%.2f", parsedAmount)}** **$category** entry before I save it to your ledger:"
+                        "Please confirm the new **$${String.format(Locale.US, "%.2f", parsedAmount)}** **$category** entry before I save it to your ledger:"
                     )
 
                     val insertTool = toolRegistry.getTool("insert_expense")!!
@@ -417,31 +422,38 @@ class ChatViewModel(
                         put("merchant", category)
                         put("date", "Today")
                     }
-                    val preview = insertTool.buildApprovalPreview(writeArgs)!!
 
-                    val approvalDeferred = CompletableDeferred<Boolean>().also { pendingApprovalDeferred = it }
-                    send(
-                        StreamPipelineEvent.RequestWriteApproval(
-                            PendingWriteCardState(
-                                callId = "call_${agentMsgId.take(4)}",
-                                actionName = preview.actionBadge,
-                                fields = preview.fields
+                    val audit = ToolCallAuditor.audit("insert_expense", writeArgs, toolRegistry)
+                    if (audit is AuditResult.Valid) {
+                        val preview = insertTool.buildApprovalPreview(audit.sanitizedArgs)!!
+                        val approvalDeferred = CompletableDeferred<Boolean>().also { pendingApprovalDeferred = it }
+                        send(
+                            StreamPipelineEvent.RequestWriteApproval(
+                                PendingWriteCardState(
+                                    callId = "call_${agentMsgId.take(4)}",
+                                    actionName = preview.actionBadge,
+                                    fields = preview.fields
+                                )
                             )
                         )
-                    )
 
-                    if (approvalDeferred.await()) {
-                        val writeResult = insertTool.execute(writeArgs)
-                        val rowId = writeResult.jsonOutput["insertedRowId"]?.jsonPrimitive?.long
-                        streamWords(
-                            "\n\nSaved! Logged **$${String.format("%.2f", parsedAmount)}** under **$category** (SQLite Row **#ID-$rowId**)."
-                        )
-                    } else {
-                        streamWords("\n\nUnderstood—I discarded the entry and left your database unchanged.")
+                        if (approvalDeferred.await()) {
+                            val writeResult = withContext(NonCancellable) {
+                                insertTool.execute(audit.sanitizedArgs)
+                            }
+                            val rowId = writeResult.jsonOutput["insertedRowId"]?.jsonPrimitive?.long
+                            streamWords(
+                                "\n\nSaved! Logged **$${String.format(Locale.US, "%.2f", parsedAmount)}** under **$category** (SQLite Row **#ID-$rowId**)."
+                            )
+                        } else {
+                            streamWords("\n\nUnderstood—I discarded the entry and left your database unchanged.")
+                        }
+                    } else if (audit is AuditResult.Rejected) {
+                        streamWords("\n\n🛡️ **Guardrail Blocked:** ${audit.reason}")
                     }
                 }
 
-                // 5. Normal conversation / Greetings ("hello", "hi", "what can you do?")
+                // 5. Normal conversation / Greetings
                 else -> {
                     streamWords(
                         "Hello! I'm **PocketAgent**, your on-device expense assistant. " +
@@ -451,7 +463,11 @@ class ChatViewModel(
                 }
             }
 
-            _uiState.update { it.copy(usedTokens = (it.usedTokens + 95).coerceAtMost(it.maxTokens)) }
+            _uiState.update { state ->
+                state.copy(
+                    usedTokens = contextWindowManager.estimateTotalTokens(state.messages)
+                )
+            }
             close()
         }
 
@@ -480,6 +496,12 @@ class ChatViewModel(
                 }
             )
         }
+    }
+
+    override fun onCleared() {
+        activeGenerationJob?.cancel()
+        pendingApprovalDeferred?.cancel()
+        pendingApprovalDeferred = null
     }
 
     companion object {
