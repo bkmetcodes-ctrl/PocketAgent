@@ -3,7 +3,9 @@ package com.bekacodes.pocketagent.ui.presentation.chat
 import com.bekacodes.pocketagent.data.ExpenseDao
 import com.bekacodes.pocketagent.data.ExpenseEntity
 import com.bekacodes.pocketagent.data.GeminiSseClient
+import com.bekacodes.pocketagent.data.repository.ExpenseRepository
 import com.bekacodes.pocketagent.domain.AgentToolRegistry
+import com.bekacodes.pocketagent.domain.ContextWindowManager
 import com.bekacodes.pocketagent.ui.presentation.chat.model.ChatIntent
 import com.bekacodes.pocketagent.ui.presentation.chat.model.ChatMessageUiModel
 import com.bekacodes.pocketagent.ui.presentation.chat.model.EngineMode
@@ -94,6 +96,28 @@ class FakeExpenseDao : ExpenseDao {
     }
 }
 
+class FakeExpenseRepository(private val dao: FakeExpenseDao) : ExpenseRepository {
+    override fun observeAllExpenses(): Flow<List<ExpenseEntity>> = dao.observeAllExpenses()
+
+    override suspend fun getExpensesByCategory(category: String): Result<List<ExpenseEntity>> =
+        runCatching { dao.getExpensesByCategory(category) }
+
+    override suspend fun getAllExpensesSnapshot(): Result<List<ExpenseEntity>> =
+        runCatching { dao.getAllExpensesSnapshot() }
+
+    override suspend fun insertExpense(expense: ExpenseEntity): Result<Long> =
+        runCatching { dao.insertExpense(expense) }
+
+    override suspend fun deleteMostRecentExpense(): Result<Int> =
+        runCatching { dao.deleteMostRecentExpense() }
+
+    override suspend fun clearAll(): Result<Int> =
+        runCatching { dao.clearAll() }
+
+    override suspend fun count(): Result<Int> =
+        runCatching { dao.count() }
+}
+
 @OptIn(ExperimentalCoroutinesApi::class)
 class ChatViewModelTest {
 
@@ -101,6 +125,7 @@ class ChatViewModelTest {
     val mainDispatcherRule = MainDispatcherRule()
 
     private lateinit var fakeExpenseDao: FakeExpenseDao
+    private lateinit var fakeExpenseRepository: FakeExpenseRepository
     private lateinit var toolRegistry: AgentToolRegistry
     private lateinit var geminiSseClient: GeminiSseClient
     private lateinit var viewModel: ChatViewModel
@@ -136,17 +161,26 @@ class ChatViewModelTest {
         }
         fakeExpenseDao.seedData(sampleExpenses)
 
-        toolRegistry = AgentToolRegistry(fakeExpenseDao)
-        geminiSseClient = GeminiSseClient("")
-        viewModel = ChatViewModel(fakeExpenseDao, toolRegistry, geminiSseClient)
+        fakeExpenseRepository = FakeExpenseRepository(fakeExpenseDao)
+        toolRegistry = AgentToolRegistry(fakeExpenseRepository)
+        geminiSseClient = GeminiSseClient("", ioDispatcher = mainDispatcherRule.testDispatcher)
+
+        viewModel = ChatViewModel(
+            expenseRepository = fakeExpenseRepository,
+            toolRegistry = toolRegistry,
+            geminiSseClient = geminiSseClient,
+            contextWindowManager = ContextWindowManager(),
+            ioDispatcher = mainDispatcherRule.testDispatcher,
+            defaultDispatcher = mainDispatcherRule.testDispatcher
+        )
     }
 
     @Test
-    fun initialization_observesExpensesFromDao() = runTest {
+    fun initialization_observesExpensesFromRepository() = runTest {
         viewModel.uiState.waitUntil { it.expenses.isNotEmpty() }
 
         val state = viewModel.uiState.value
-        assertTrue("Expenses should be observed from DAO on init", state.expenses.isNotEmpty())
+        assertTrue("Expenses should be observed from Repository on init", state.expenses.isNotEmpty())
         assertEquals(11, state.expenses.size)
     }
 
@@ -373,12 +407,5 @@ class ChatViewModelTest {
             agentMsg.markdownText.contains("Stream Error") || agentMsg.markdownText.contains("Missing GEMINI_API_KEY"),
         )
         assertEquals(MessageStreamStatus.Completed, agentMsg.status)
-    }
-
-    @Test
-    fun provideFactory_createsViewModelInstance() {
-        val factory = ChatViewModel.provideFactory(fakeExpenseDao, toolRegistry)
-        val vm = factory.create(ChatViewModel::class.java)
-        assertNotNull(vm)
     }
 }

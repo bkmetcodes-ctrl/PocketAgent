@@ -11,6 +11,8 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.bekacodes.pocketagent.ui.presentation.chat.model.ChatMessageUiModel
@@ -19,9 +21,12 @@ import com.bekacodes.pocketagent.ui.presentation.chat.model.ChatMessageUiModel
  * Bubble component rendering user messages in the chat stream.
  */
 @Composable
-fun UserMessageBubble(message: ChatMessageUiModel.UserMessage) {
+fun UserMessageBubble(
+    message: ChatMessageUiModel.UserMessage,
+    modifier: Modifier = Modifier
+) {
     Box(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = modifier.fillMaxWidth(),
         contentAlignment = Alignment.CenterEnd
     ) {
         Surface(
@@ -32,7 +37,9 @@ fun UserMessageBubble(message: ChatMessageUiModel.UserMessage) {
                 bottomStart = 20.dp,
                 bottomEnd = 4.dp
             ),
-            modifier = Modifier.widthIn(max = 300.dp)
+            modifier = Modifier
+                .widthIn(max = 300.dp)
+                .semantics { contentDescription = "User message: ${message.text}" }
         ) {
             Text(
                 text = message.text,

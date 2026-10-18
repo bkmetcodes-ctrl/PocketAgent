@@ -34,6 +34,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -51,10 +55,11 @@ fun ChatBottomBar(
     onInputChanged: (String) -> Unit,
     onSendClicked: () -> Unit,
     onStopClicked: () -> Unit,
-    onSuggestionClicked: (String) -> Unit
+    onSuggestionClicked: (String) -> Unit,
+    modifier: Modifier = Modifier
 ) {
     Column(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .background(MaterialTheme.colorScheme.background)
             .navigationBarsPadding()
@@ -76,6 +81,10 @@ fun ChatBottomBar(
                     modifier = Modifier
                         .clip(RoundedCornerShape(50))
                         .clickable(enabled = !isGenerating) { onSuggestionClicked(suggestion) }
+                        .semantics {
+                            role = Role.Button
+                            contentDescription = "Suggestion: $suggestion"
+                        }
                 ) {
                     Text(
                         text = suggestion,
@@ -118,7 +127,11 @@ fun ChatBottomBar(
                     textStyle = TextStyle(color = PocketColors.TextPrimary, fontSize = 15.sp),
                     cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
                     singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .semantics {
+                            contentDescription = "Prompt input field"
+                        }
                 )
             }
 
@@ -132,25 +145,38 @@ fun ChatBottomBar(
                             .size(50.dp)
                             .clip(CircleShape)
                             .background(MaterialTheme.colorScheme.error)
+                            .semantics {
+                                role = Role.Button
+                                contentDescription = "Stop generation"
+                            }
                     ) {
                         Icon(
                             imageVector = Icons.Default.Close,
-                            contentDescription = "Stop Generation",
+                            contentDescription = "Stop generation icon",
                             tint = MaterialTheme.colorScheme.onError
                         )
                     }
                 } else {
                     IconButton(
                         onClick = onSendClicked,
+                        enabled = inputText.isNotBlank(),
                         modifier = Modifier
                             .size(50.dp)
                             .clip(CircleShape)
-                            .background(MaterialTheme.colorScheme.primary)
+                            .background(
+                                if (inputText.isNotBlank()) MaterialTheme.colorScheme.primary
+                                else MaterialTheme.colorScheme.surfaceContainerHigh
+                            )
+                            .semantics {
+                                role = Role.Button
+                                contentDescription = "Send prompt"
+                            }
                     ) {
                         Icon(
                             imageVector = Icons.AutoMirrored.Filled.ArrowForward,
-                            contentDescription = "Send Prompt",
-                            tint = MaterialTheme.colorScheme.onPrimary
+                            contentDescription = "Send prompt icon",
+                            tint = if (inputText.isNotBlank()) MaterialTheme.colorScheme.onPrimary
+                            else MaterialTheme.colorScheme.outline
                         )
                     }
                 }

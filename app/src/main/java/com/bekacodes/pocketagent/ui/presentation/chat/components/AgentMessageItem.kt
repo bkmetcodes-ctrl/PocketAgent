@@ -30,6 +30,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
@@ -51,17 +55,19 @@ import com.bekacodes.pocketagent.ui.theme.PocketColors
 fun AgentMessageItem(
     message: ChatMessageUiModel.AgentMessage,
     onApproveWrite: (String) -> Unit,
-    onRejectWrite: (String) -> Unit
+    onRejectWrite: (String) -> Unit,
+    modifier: Modifier = Modifier
 ) {
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = modifier.fillMaxWidth(),
         verticalAlignment = Alignment.Top
     ) {
         Box(
             modifier = Modifier
                 .size(34.dp)
                 .clip(CircleShape)
-                .background(MaterialTheme.colorScheme.primary),
+                .background(MaterialTheme.colorScheme.primary)
+                .semantics { contentDescription = "PocketAgent Avatar" },
             contentAlignment = Alignment.Center
         ) {
             Text(
@@ -86,7 +92,10 @@ fun AgentMessageItem(
                     text = rememberParsedMarkdown(message.markdownText),
                     color = MaterialTheme.colorScheme.onSurface,
                     fontSize = 15.sp,
-                    lineHeight = 23.sp
+                    lineHeight = 23.sp,
+                    modifier = Modifier.semantics {
+                        contentDescription = "Agent response: ${message.markdownText}"
+                    }
                 )
             }
 
@@ -102,7 +111,8 @@ fun AgentMessageItem(
                 Surface(
                     color = PocketColors.Amber.copy(alpha = 0.12f),
                     shape = RoundedCornerShape(6.dp),
-                    border = BorderStroke(1.dp, PocketColors.Amber.copy(alpha = 0.4f))
+                    border = BorderStroke(1.dp, PocketColors.Amber.copy(alpha = 0.4f)),
+                    modifier = Modifier.semantics { contentDescription = "Generation stopped by user" }
                 ) {
                     Text(
                         text = "⏹ Generation stopped by user",
@@ -119,10 +129,17 @@ fun AgentMessageItem(
 
 @Composable
 private fun ReadToolChip(badge: ReadToolBadge) {
+    val chipText = if (badge.isRunning) {
+        "Running Local DB: ${badge.callSignature}..."
+    } else {
+        "Queried Local DB: ${badge.callSignature} • ${badge.durationMs}ms"
+    }
+
     Surface(
         color = MaterialTheme.colorScheme.surfaceContainer,
         shape = RoundedCornerShape(50),
-        border = BorderStroke(1.dp, PocketColors.Emerald.copy(alpha = 0.45f))
+        border = BorderStroke(1.dp, PocketColors.Emerald.copy(alpha = 0.45f)),
+        modifier = Modifier.semantics { contentDescription = chipText }
     ) {
         Row(
             modifier = Modifier
@@ -138,11 +155,7 @@ private fun ReadToolChip(badge: ReadToolBadge) {
             )
             Spacer(modifier = Modifier.width(8.dp))
             Text(
-                text = if (badge.isRunning) {
-                    "Running Local DB: ${badge.callSignature}..."
-                } else {
-                    "Queried Local DB: ${badge.callSignature} • ${badge.durationMs}ms"
-                },
+                text = chipText,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 fontSize = 12.sp,
                 fontFamily = FontFamily.Monospace,
@@ -163,7 +176,9 @@ private fun PendingWriteApprovalCard(
         color = MaterialTheme.colorScheme.surfaceContainer,
         shape = RoundedCornerShape(16.dp),
         border = BorderStroke(1.dp, PocketColors.Amber.copy(alpha = 0.5f)),
-        modifier = Modifier.fillMaxWidth()
+        modifier = Modifier
+            .fillMaxWidth()
+            .semantics { contentDescription = "Pending Database Write Approval Card for ${state.actionName}" }
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -253,7 +268,11 @@ private fun PendingWriteApprovalCard(
                             onClick = onReject,
                             modifier = Modifier
                                 .weight(1f)
-                                .height(46.dp),
+                                .height(46.dp)
+                                .semantics {
+                                    role = Role.Button
+                                    contentDescription = "Reject database write"
+                                },
                             shape = RoundedCornerShape(50),
                             border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
                             colors = ButtonDefaults.outlinedButtonColors(
@@ -267,7 +286,11 @@ private fun PendingWriteApprovalCard(
                             onClick = onApprove,
                             modifier = Modifier
                                 .weight(1.2f)
-                                .height(46.dp),
+                                .height(46.dp)
+                                .semantics {
+                                    role = Role.Button
+                                    contentDescription = "Accept and save to database"
+                                },
                             shape = RoundedCornerShape(50),
                             colors = ButtonDefaults.buttonColors(
                                 containerColor = MaterialTheme.colorScheme.tertiary,
@@ -289,7 +312,8 @@ private fun PendingWriteApprovalCard(
                         color = PocketColors.EmeraldSoft,
                         fontSize = 13.sp,
                         fontWeight = FontWeight.Bold,
-                        fontFamily = FontFamily.Monospace
+                        fontFamily = FontFamily.Monospace,
+                        modifier = Modifier.semantics { contentDescription = "Saved to Local Room Database" }
                     )
                 }
 
@@ -299,7 +323,8 @@ private fun PendingWriteApprovalCard(
                         color = PocketColors.Coral,
                         fontSize = 13.sp,
                         fontWeight = FontWeight.Bold,
-                        fontFamily = FontFamily.Monospace
+                        fontFamily = FontFamily.Monospace,
+                        modifier = Modifier.semantics { contentDescription = "Write Rejected by User" }
                     )
                 }
             }

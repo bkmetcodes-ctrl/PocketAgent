@@ -16,6 +16,7 @@ data class ChatUiState(
     val isInspectorVisible: Boolean = false,
     val inputText: String = "",
     val isGenerating: Boolean = false,
+    val errorMessage: String? = null,
     val quickSuggestions: List<String> = listOf(
         "Monthly summary",
         "Undo last entry",

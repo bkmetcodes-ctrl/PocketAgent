@@ -1,6 +1,7 @@
 package com.bekacodes.pocketagent.data
 
 import com.bekacodes.pocketagent.domain.AgentTool
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
@@ -35,6 +36,7 @@ import java.util.concurrent.TimeUnit
  *
  * @param apiKey Gemini REST API key.
  * @param okHttpClient Shared or custom OkHttpClient instance configured with appropriate timeouts.
+ * @param ioDispatcher Injectable CoroutineDispatcher for network I/O.
  */
 class GeminiSseClient(
     private val apiKey: String,
@@ -42,13 +44,14 @@ class GeminiSseClient(
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(60, TimeUnit.SECONDS)
         .writeTimeout(15, TimeUnit.SECONDS)
-        .build()
+        .build(),
+    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO
 ) {
     private val json = Json { ignoreUnknownKeys = true }
 
     /**
      * Streams a single Gemini turn over Server-Sent Events (SSE).
-     * Automatically dispatches network I/O on [Dispatchers.IO].
+     * Automatically dispatches network I/O on [ioDispatcher].
      */
     fun streamTurn(
         prompt: String,
@@ -64,57 +67,63 @@ class GeminiSseClient(
             return@callbackFlow
         }
 
-        val requestPayload = buildJsonObject {
-            putJsonObject("systemInstruction") {
-                putJsonArray("parts") {
-                    addJsonObject {
-                        put(
-                            "text",
-                            "You are PocketAgent, an on-device financial assistant connected to a local SQLite database. " +
-                                    "Only call tools when the user explicitly asks to check expenses (`get_expenses`), " +
-                                    "log a specific expense (`insert_expense`), delete the last entry (`delete_last_expense`), " +
-                                    "or clear the database (`clear_all_expenses`). " +
-                                    "Never invent or guess dollar amounts. If the user says hello or asks a general question, " +
-                                    "reply conversationally without calling any tools."
-                        )
-                    }
-                }
-            }
-            putJsonArray("contents") {
-                addJsonObject {
+        val requestPayload = runCatching {
+            buildJsonObject {
+                putJsonObject("systemInstruction") {
                     putJsonArray("parts") {
-                        addJsonObject { put("text", prompt) }
+                        addJsonObject {
+                            put(
+                                "text",
+                                "You are PocketAgent, an on-device financial assistant connected to a local SQLite database. " +
+                                        "Only call tools when the user explicitly asks to check expenses (`get_expenses`), " +
+                                        "log a specific expense (`insert_expense`), delete the last entry (`delete_last_expense`), " +
+                                        "or clear the database (`clear_all_expenses`). " +
+                                        "Never invent or guess dollar amounts. If the user says hello or asks a general question, " +
+                                        "reply conversationally without calling any tools."
+                            )
+                        }
                     }
                 }
-            }
-            if (tools.isNotEmpty()) {
-                putJsonArray("tools") {
+                putJsonArray("contents") {
                     addJsonObject {
-                        putJsonArray("functionDeclarations") {
-                            tools.forEach { tool ->
-                                addJsonObject {
-                                    put("name", tool.name)
-                                    put("description", tool.description)
-                                    put("parameters", json.parseToJsonElement(tool.parametersSchemaJson))
+                        putJsonArray("parts") {
+                            addJsonObject { put("text", prompt) }
+                        }
+                    }
+                }
+                if (tools.isNotEmpty()) {
+                    putJsonArray("tools") {
+                        addJsonObject {
+                            putJsonArray("functionDeclarations") {
+                                tools.forEach { tool ->
+                                    addJsonObject {
+                                        put("name", tool.name)
+                                        put("description", tool.description)
+                                        put("parameters", json.parseToJsonElement(tool.parametersSchemaJson))
+                                    }
                                 }
                             }
                         }
                     }
                 }
             }
+        }.getOrElse { e ->
+            trySend(LlmStreamEvent.StreamError("Failed to build request payload: ${e.localizedMessage}"))
+            close()
+            return@callbackFlow
         }
 
         val url =
             "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:streamGenerateContent?alt=sse&key=$apiKey"
 
-        val request = try {
+        val request = runCatching {
             Request.Builder()
                 .url(url)
                 .addHeader("Content-Type", "application/json")
                 .addHeader("Accept", "text/event-stream")
                 .post(requestPayload.toString().toRequestBody("application/json".toMediaType()))
                 .build()
-        } catch (e: Exception) {
+        }.getOrElse { e ->
             trySend(LlmStreamEvent.StreamError("Request construction failed: ${e.localizedMessage}"))
             close()
             return@callbackFlow
@@ -164,11 +173,9 @@ class GeminiSseClient(
             }
 
             override fun onFailure(eventSource: EventSource, t: Throwable?, response: Response?) {
-                val errorBody = try {
+                val errorBody = runCatching {
                     response?.body?.use { it.string().take(200) }
-                } catch (_: Exception) {
-                    null
-                }
+                }.getOrNull()
                 val msg = t?.localizedMessage
                     ?: "HTTP ${response?.code ?: "Unknown"}: ${errorBody ?: "Stream failed"}"
                 trySend(LlmStreamEvent.StreamError(msg))
@@ -181,5 +188,5 @@ class GeminiSseClient(
         awaitClose {
             eventSource.cancel()
         }
-    }.flowOn(Dispatchers.IO)
+    }.flowOn(ioDispatcher)
 }

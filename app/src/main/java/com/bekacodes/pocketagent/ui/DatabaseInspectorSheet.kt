@@ -24,6 +24,10 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -40,12 +44,14 @@ import java.util.Locale
 fun DatabaseInspectorSheet(
     expenses: List<ExpenseEntity>,
     onClearDatabase: () -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    modifier: Modifier = Modifier
 ) {
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-        scrimColor = PocketColors.Background.copy(alpha = 0.75f)
+        scrimColor = PocketColors.Background.copy(alpha = 0.75f),
+        modifier = modifier
     ) {
         Column(
             modifier = Modifier
@@ -83,7 +89,11 @@ fun DatabaseInspectorSheet(
 
                 TextButton(
                     onClick = onClearDatabase,
-                    enabled = expenses.isNotEmpty()
+                    enabled = expenses.isNotEmpty(),
+                    modifier = Modifier.semantics {
+                        role = Role.Button
+                        contentDescription = "Clear all database rows"
+                    }
                 ) {
                     Text(
                         text = "Clear All",
@@ -122,6 +132,7 @@ fun DatabaseInspectorSheet(
                         key = { it.id },
                         contentType = { "expense_entity" }
                     ) { item ->
+                        val itemDesc = "Row #${item.id}: ${item.category}, ${item.merchant}, $${String.format(Locale.US, "%.2f", item.amount)}"
                         Surface(
                             color = MaterialTheme.colorScheme.surfaceContainer,
                             shape = RoundedCornerShape(12.dp),
@@ -129,7 +140,8 @@ fun DatabaseInspectorSheet(
                                 1.dp,
                                 if (item.addedByAgent) PocketColors.Emerald.copy(alpha = 0.6f)
                                 else MaterialTheme.colorScheme.outlineVariant
-                            )
+                            ),
+                            modifier = Modifier.semantics { contentDescription = itemDesc }
                         ) {
                             Row(
                                 modifier = Modifier

@@ -1,12 +1,13 @@
 package com.bekacodes.pocketagent.ui.presentation.chat
 
 import androidx.lifecycle.ViewModel
-import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.bekacodes.pocketagent.BuildConfig
-import com.bekacodes.pocketagent.data.ExpenseDao
 import com.bekacodes.pocketagent.data.GeminiSseClient
 import com.bekacodes.pocketagent.data.LlmStreamEvent
+import com.bekacodes.pocketagent.data.repository.ExpenseRepository
+import com.bekacodes.pocketagent.di.DefaultDispatcher
+import com.bekacodes.pocketagent.di.IoDispatcher
 import com.bekacodes.pocketagent.domain.AgentToolRegistry
 import com.bekacodes.pocketagent.domain.AuditResult
 import com.bekacodes.pocketagent.domain.ContextWindowManager
@@ -20,9 +21,10 @@ import com.bekacodes.pocketagent.ui.presentation.chat.model.EngineMode
 import com.bekacodes.pocketagent.ui.presentation.chat.model.MessageStreamStatus
 import com.bekacodes.pocketagent.ui.presentation.chat.model.PendingWriteCardState
 import com.bekacodes.pocketagent.ui.presentation.chat.model.StreamPipelineEvent
+import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.channels.ProducerScope
@@ -33,6 +35,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.scan
 import kotlinx.coroutines.flow.update
@@ -46,16 +49,21 @@ import kotlinx.serialization.json.long
 import kotlinx.serialization.json.put
 import java.util.Locale
 import java.util.UUID
+import javax.inject.Inject
 import kotlin.time.measureTimedValue
 
 /**
- * MVI ViewModel managing PocketAgent chat UI state, Gemini SSE streaming, tool executions, and room database observing.
+ * MVI ViewModel managing PocketAgent chat UI state, Gemini SSE streaming, tool executions,
+ * and repository database observations.
  */
-class ChatViewModel(
-    private val expenseDao: ExpenseDao,
+@HiltViewModel
+class ChatViewModel @Inject constructor(
+    private val expenseRepository: ExpenseRepository,
     private val toolRegistry: AgentToolRegistry,
-    private val geminiSseClient: GeminiSseClient = GeminiSseClient(BuildConfig.GEMINI_API_KEY),
-    private val contextWindowManager: ContextWindowManager = ContextWindowManager()
+    private val geminiSseClient: GeminiSseClient,
+    private val contextWindowManager: ContextWindowManager = ContextWindowManager(),
+    @IoDispatcher private val ioDispatcher: CoroutineDispatcher,
+    @DefaultDispatcher private val defaultDispatcher: CoroutineDispatcher
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(
@@ -69,10 +77,20 @@ class ChatViewModel(
     private var pendingApprovalDeferred: CompletableDeferred<Boolean>? = null
 
     init {
+        observeExpenses()
+    }
+
+    private fun observeExpenses() {
         viewModelScope.launch {
-            expenseDao.observeAllExpenses().collect { rows ->
-                _uiState.update { it.copy(expenses = rows) }
-            }
+            expenseRepository.observeAllExpenses()
+                .catch { e ->
+                    _uiState.update { state ->
+                        state.copy(errorMessage = "Database observation error: ${e.localizedMessage}")
+                    }
+                }
+                .collect { rows ->
+                    _uiState.update { it.copy(expenses = rows) }
+                }
         }
     }
 
@@ -84,10 +102,14 @@ class ChatViewModel(
             is ChatIntent.UpdateInput -> _uiState.update { it.copy(inputText = intent.text) }
             is ChatIntent.SwitchEngineMode -> _uiState.update { it.copy(engineMode = intent.mode) }
             is ChatIntent.ToggleInspector -> _uiState.update { it.copy(isInspectorVisible = intent.visible) }
+            is ChatIntent.DismissError -> _uiState.update { it.copy(errorMessage = null) }
             is ChatIntent.ClearDatabase -> {
                 viewModelScope.launch {
-                    withContext(NonCancellable + Dispatchers.IO) {
-                        expenseDao.clearAll()
+                    val result = withContext(NonCancellable + ioDispatcher) {
+                        expenseRepository.clearAll()
+                    }
+                    result.onFailure { e ->
+                        _uiState.update { it.copy(errorMessage = "Failed to clear database: ${e.localizedMessage}") }
                     }
                 }
             }
@@ -130,6 +152,7 @@ class ChatViewModel(
             state.copy(
                 inputText = "",
                 isGenerating = true,
+                errorMessage = null,
                 usedTokens = estimatedTokens,
                 messages = trimmedMessages
             )
@@ -174,7 +197,7 @@ class ChatViewModel(
                             )
                         }
                     }
-                    .flowOn(Dispatchers.Default)
+                    .flowOn(defaultDispatcher)
                     .collect { updatedMsg ->
                         updateAgentMessage(agentMsgId) { updatedMsg }
                     }
@@ -187,6 +210,16 @@ class ChatViewModel(
                     }
                 }
                 throw e
+            } catch (e: Exception) {
+                withContext(NonCancellable) {
+                    updateAgentMessage(agentMsgId) { msg ->
+                        msg.copy(
+                            markdownText = msg.markdownText + "\n\n⚠️ **Error:** ${e.localizedMessage}",
+                            status = MessageStreamStatus.Completed
+                        )
+                    }
+                    _uiState.update { it.copy(errorMessage = e.localizedMessage) }
+                }
             } finally {
                 withContext(NonCancellable) {
                     _uiState.update { state ->
@@ -502,17 +535,5 @@ class ChatViewModel(
         activeGenerationJob?.cancel()
         pendingApprovalDeferred?.cancel()
         pendingApprovalDeferred = null
-    }
-
-    companion object {
-        fun provideFactory(
-            expenseDao: ExpenseDao,
-            toolRegistry: AgentToolRegistry
-        ): ViewModelProvider.Factory = object : ViewModelProvider.Factory {
-            @Suppress("UNCHECKED_CAST")
-            override fun <T : ViewModel> create(modelClass: Class<T>): T {
-                return ChatViewModel(expenseDao, toolRegistry) as T
-            }
-        }
     }
 }

@@ -23,6 +23,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -40,10 +44,11 @@ fun PocketAgentTopBar(
     usedTokens: Int,
     maxTokens: Int,
     onSwitchMode: (EngineMode) -> Unit,
-    toggleInspector: (Boolean) -> Unit
+    toggleInspector: (Boolean) -> Unit,
+    modifier: Modifier = Modifier
 ) {
     Column(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .background(MaterialTheme.colorScheme.background)
             .statusBarsPadding()
@@ -55,7 +60,12 @@ fun PocketAgentTopBar(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.semantics {
+                    contentDescription = "PocketAgent application title"
+                }
+            ) {
                 Text(
                     text = "PocketAgent",
                     color = PocketColors.TextPrimary,
@@ -90,20 +100,24 @@ fun PocketAgentTopBar(
                 )
             }
 
+            val formattedUsed = String.format(Locale.US, "%.1f", usedTokens / 1000f)
             Surface(
                 color = MaterialTheme.colorScheme.surfaceContainer,
                 shape = RoundedCornerShape(10.dp),
                 border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-                modifier = Modifier.clickable { toggleInspector(true) }
+                modifier = Modifier
+                    .clip(RoundedCornerShape(10.dp))
+                    .clickable(
+                        onClickLabel = "Open Room SQLite Inspector",
+                        onClick = { toggleInspector(true) }
+                    )
+                    .semantics {
+                        role = Role.Button
+                        contentDescription = "Token usage: $formattedUsed K of ${maxTokens / 1000}K tokens. Tap to inspect Room database."
+                    }
             ) {
                 Text(
-                    text = "${
-                        String.format(
-                            Locale.US,
-                            "%.1f",
-                            usedTokens / 1000f
-                        )
-                    }k / ${maxTokens / 1000}k\ntkns",
+                    text = "${formattedUsed}k / ${maxTokens / 1000}k\ntkns",
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     fontSize = 10.sp,
                     lineHeight = 13.sp,
@@ -126,7 +140,14 @@ private fun EngineModePill(
         modifier = Modifier
             .clip(RoundedCornerShape(50))
             .background(if (selected) MaterialTheme.colorScheme.primary else Color.Transparent)
-            .clickable(onClick = onClick)
+            .clickable(
+                onClickLabel = "Select $label mode",
+                onClick = onClick
+            )
+            .semantics {
+                role = Role.RadioButton
+                contentDescription = "$label mode, ${if (selected) "selected" else "not selected"}"
+            }
             .padding(horizontal = 12.dp, vertical = 6.dp),
         contentAlignment = Alignment.Center
     ) {

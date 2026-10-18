@@ -1,18 +1,26 @@
 package com.bekacodes.pocketagent.domain
 
 import com.bekacodes.pocketagent.ui.presentation.chat.model.ChatMessageUiModel
+import javax.inject.Inject
 
 /**
  * Manages the on-device context window budget using a heuristic token estimator
  * (~4 characters per token for English/JSON) and sliding-window turn eviction.
- *
- * @param maxContextTokens Hard maximum context window budget (e.g. 8000 tokens).
- * @param systemPromptOverheadTokens Fixed overhead allocated for system instructions and tool declarations.
  */
-class ContextWindowManager(
-    val maxContextTokens: Int = 8000,
-    private val systemPromptOverheadTokens: Int = 420
-) {
+class ContextWindowManager @Inject constructor() {
+    var maxContextTokens: Int = 8000
+        private set
+    var systemPromptOverheadTokens: Int = 420
+        private set
+
+    /**
+     * Secondary constructor allowing custom context token limits for testing.
+     */
+    constructor(maxContextTokens: Int, systemPromptOverheadTokens: Int = 420) : this() {
+        this.maxContextTokens = maxContextTokens
+        this.systemPromptOverheadTokens = systemPromptOverheadTokens
+    }
+
     /**
      * Estimates the total token count across the provided chat message history.
      */

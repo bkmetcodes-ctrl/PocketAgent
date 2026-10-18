@@ -28,4 +28,7 @@ sealed interface ChatIntent {
 
     /** Clears all database records from SQLite ledger. */
     data object ClearDatabase : ChatIntent
+
+    /** Dismisses currently displayed error message banner. */
+    data object DismissError : ChatIntent
 }

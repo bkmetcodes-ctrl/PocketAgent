@@ -3,6 +3,9 @@ package com.bekacodes.pocketagent.domain
 import androidx.compose.runtime.Immutable
 import com.bekacodes.pocketagent.data.ExpenseDao
 import com.bekacodes.pocketagent.data.ExpenseEntity
+import com.bekacodes.pocketagent.data.repository.ExpenseRepository
+import com.bekacodes.pocketagent.data.repository.ExpenseRepositoryImpl
+import kotlinx.coroutines.Dispatchers
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
@@ -45,7 +48,7 @@ interface AgentTool {
     fun buildApprovalPreview(arguments: JsonObject): PendingWritePreview? = null
 
     /**
-     * Executes the underlying business logic on the local database or domain layer.
+     * Executes the underlying business logic on the local repository or domain layer.
      */
     suspend fun execute(arguments: JsonObject): ToolExecutionResult
 }
@@ -53,7 +56,7 @@ interface AgentTool {
 /**
  * Tool 1: Read-Only Expense Query (Executes automatically mid-stream without user approval).
  */
-class GetExpensesTool(private val expenseDao: ExpenseDao) : AgentTool {
+class GetExpensesTool(private val expenseRepository: ExpenseRepository) : AgentTool {
     override val name: String = "get_expenses"
     override val description: String =
         "Queries local SQLite expenses, optionally filtered by category."
@@ -70,12 +73,13 @@ class GetExpensesTool(private val expenseDao: ExpenseDao) : AgentTool {
 
     override suspend fun execute(arguments: JsonObject): ToolExecutionResult {
         val category = arguments["category"]?.jsonPrimitive?.contentOrNull?.trim()
-        val rows = if (!category.isNullOrBlank()) {
-            expenseDao.getExpensesByCategory(category)
+        val result = if (!category.isNullOrBlank()) {
+            expenseRepository.getExpensesByCategory(category)
         } else {
-            expenseDao.getAllExpensesSnapshot()
+            expenseRepository.getAllExpensesSnapshot()
         }
 
+        val rows = result.getOrDefault(emptyList())
         val total = rows.sumOf { it.amount }
         val count = rows.size
         val signature =
@@ -85,12 +89,19 @@ class GetExpensesTool(private val expenseDao: ExpenseDao) : AgentTool {
             put("category", category ?: "All")
             put("visitCount", count)
             put("totalAmountUsd", total)
+            put("status", if (result.isSuccess) "SUCCESS" else "ERROR")
+        }
+
+        val summaryText = if (result.isSuccess) {
+            "Found $count record(s) totaling $${String.format(Locale.US, "%.2f", total)}"
+        } else {
+            "Failed to query database: ${result.exceptionOrNull()?.localizedMessage}"
         }
 
         return ToolExecutionResult(
             signatureDisplay = signature,
             jsonOutput = resultJson,
-            humanReadableSummary = "Found $count record(s) totaling $${String.format(Locale.US, "%.2f", total)}"
+            humanReadableSummary = summaryText
         )
     }
 }
@@ -98,7 +109,7 @@ class GetExpensesTool(private val expenseDao: ExpenseDao) : AgentTool {
 /**
  * Tool 2: Mutating Database Insert (Suspends stream and requires explicit user approval).
  */
-class InsertExpenseTool(private val expenseDao: ExpenseDao) : AgentTool {
+class InsertExpenseTool(private val expenseRepository: ExpenseRepository) : AgentTool {
     override val name: String = "insert_expense"
     override val description: String =
         "Inserts a new expense row into the user's local Room ledger."
@@ -138,7 +149,7 @@ class InsertExpenseTool(private val expenseDao: ExpenseDao) : AgentTool {
         val merchant = arguments["merchant"]?.jsonPrimitive?.contentOrNull ?: category
         val date = arguments["date"]?.jsonPrimitive?.contentOrNull ?: "Yesterday"
 
-        val rowId = expenseDao.insertExpense(
+        val result = expenseRepository.insertExpense(
             ExpenseEntity(
                 amount = amount,
                 category = category,
@@ -148,21 +159,22 @@ class InsertExpenseTool(private val expenseDao: ExpenseDao) : AgentTool {
             )
         )
 
+        val rowId = result.getOrDefault(-1L)
+        val isSuccess = result.isSuccess && rowId > 0
+
         return ToolExecutionResult(
             signatureDisplay = "insert_expense(amount=$amount, category='$category')",
             jsonOutput = buildJsonObject {
-                put("status", "SUCCESS")
+                put("status", if (isSuccess) "SUCCESS" else "ERROR")
                 put("insertedRowId", rowId)
                 put("amount", amount)
                 put("category", category)
             },
-            humanReadableSummary = "Inserted row #$rowId ($${
-                String.format(
-                    Locale.US,
-                    "%.2f",
-                    amount
-                )
-            } in $category)"
+            humanReadableSummary = if (isSuccess) {
+                "Inserted row #$rowId ($${String.format(Locale.US, "%.2f", amount)} in $category)"
+            } else {
+                "Failed to insert expense: ${result.exceptionOrNull()?.localizedMessage}"
+            }
         )
     }
 }
@@ -170,7 +182,7 @@ class InsertExpenseTool(private val expenseDao: ExpenseDao) : AgentTool {
 /**
  * Tool 3: Undo / Delete Most Recent Expense Entry.
  */
-class DeleteLastExpenseTool(private val expenseDao: ExpenseDao) : AgentTool {
+class DeleteLastExpenseTool(private val expenseRepository: ExpenseRepository) : AgentTool {
     override val name: String = "delete_last_expense"
     override val description: String =
         "Deletes the most recently logged expense row from the database."
@@ -189,7 +201,8 @@ class DeleteLastExpenseTool(private val expenseDao: ExpenseDao) : AgentTool {
     }
 
     override suspend fun execute(arguments: JsonObject): ToolExecutionResult {
-        val deletedCount = expenseDao.deleteMostRecentExpense()
+        val result = expenseRepository.deleteMostRecentExpense()
+        val deletedCount = result.getOrDefault(0)
         return ToolExecutionResult(
             signatureDisplay = "delete_last_expense()",
             jsonOutput = buildJsonObject {
@@ -203,7 +216,7 @@ class DeleteLastExpenseTool(private val expenseDao: ExpenseDao) : AgentTool {
 /**
  * Tool 4: Clear Entire SQLite Database.
  */
-class ClearAllExpensesTool(private val expenseDao: ExpenseDao) : AgentTool {
+class ClearAllExpensesTool(private val expenseRepository: ExpenseRepository) : AgentTool {
     override val name: String = "clear_all_expenses"
     override val description: String = "Deletes all expense records and clears the entire local database."
     override val requiresUserApproval: Boolean = true
@@ -221,7 +234,8 @@ class ClearAllExpensesTool(private val expenseDao: ExpenseDao) : AgentTool {
     }
 
     override suspend fun execute(arguments: JsonObject): ToolExecutionResult {
-        val deletedRows = expenseDao.clearAll()
+        val result = expenseRepository.clearAll()
+        val deletedRows = result.getOrDefault(0)
         return ToolExecutionResult(
             signatureDisplay = "clear_all_expenses()",
             jsonOutput = buildJsonObject {
@@ -236,12 +250,14 @@ class ClearAllExpensesTool(private val expenseDao: ExpenseDao) : AgentTool {
 /**
  * Registry containing all available [AgentTool] instances available to PocketAgent.
  */
-class AgentToolRegistry(expenseDao: ExpenseDao) {
+class AgentToolRegistry(expenseRepository: ExpenseRepository) {
+    constructor(expenseDao: ExpenseDao) : this(ExpenseRepositoryImpl(expenseDao, Dispatchers.IO))
+
     private val tools: Map<String, AgentTool> = listOf(
-        GetExpensesTool(expenseDao),
-        InsertExpenseTool(expenseDao),
-        DeleteLastExpenseTool(expenseDao),
-        ClearAllExpensesTool(expenseDao)
+        GetExpensesTool(expenseRepository),
+        InsertExpenseTool(expenseRepository),
+        DeleteLastExpenseTool(expenseRepository),
+        ClearAllExpensesTool(expenseRepository)
     ).associateBy { it.name }
 
     fun getTool(name: String): AgentTool? = tools[name]

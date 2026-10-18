@@ -2,22 +2,37 @@ package com.bekacodes.pocketagent.ui.presentation.chat
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -36,7 +51,7 @@ import com.bekacodes.pocketagent.ui.presentation.chat.model.PendingWriteCardStat
 import com.bekacodes.pocketagent.ui.theme.PocketAgentTheme
 
 /**
- * Main Chat Screen composable rendering conversation turns, top navigation, and bottom prompt bar.
+ * Main Chat Screen composable rendering conversation turns, top navigation, error banners, and bottom prompt bar.
  */
 @Composable
 fun ChatScreen(
@@ -66,13 +81,63 @@ fun ChatScreen(
         modifier = modifier.fillMaxSize(),
         containerColor = MaterialTheme.colorScheme.background,
         topBar = {
-            PocketAgentTopBar(
-                engineMode = uiState.engineMode,
-                usedTokens = uiState.usedTokens,
-                maxTokens = uiState.maxTokens,
-                onSwitchMode = { onIntent(ChatIntent.SwitchEngineMode(it)) },
-                toggleInspector = { onIntent(ChatIntent.ToggleInspector(it)) }
-            )
+            Column {
+                PocketAgentTopBar(
+                    engineMode = uiState.engineMode,
+                    usedTokens = uiState.usedTokens,
+                    maxTokens = uiState.maxTokens,
+                    onSwitchMode = { onIntent(ChatIntent.SwitchEngineMode(it)) },
+                    toggleInspector = { onIntent(ChatIntent.ToggleInspector(it)) }
+                )
+
+                uiState.errorMessage?.let { errorText ->
+                    Surface(
+                        color = MaterialTheme.colorScheme.errorContainer,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .semantics { contentDescription = "Error message: $errorText" }
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Row(
+                                modifier = Modifier.weight(1f),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Warning,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.onErrorContainer
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = errorText,
+                                    color = MaterialTheme.colorScheme.onErrorContainer,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Medium
+                                )
+                            }
+                            IconButton(
+                                onClick = { onIntent(ChatIntent.DismissError) },
+                                modifier = Modifier.semantics {
+                                    role = Role.Button
+                                    contentDescription = "Dismiss error"
+                                }
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Close,
+                                    contentDescription = "Close error banner",
+                                    tint = MaterialTheme.colorScheme.onErrorContainer
+                                )
+                            }
+                        }
+                    }
+                }
+            }
         },
         bottomBar = {
             ChatBottomBar(
