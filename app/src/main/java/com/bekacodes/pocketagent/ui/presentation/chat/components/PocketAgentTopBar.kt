@@ -2,10 +2,8 @@ package com.bekacodes.pocketagent.ui.presentation.chat.components
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -22,16 +20,16 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.bekacodes.pocketagent.ui.presentation.chat.model.EngineMode
+import com.bekacodes.pocketagent.ui.theme.PocketAgentTheme
 import com.bekacodes.pocketagent.ui.theme.PocketColors
 import java.util.Locale
 
@@ -40,10 +38,8 @@ import java.util.Locale
  */
 @Composable
 fun PocketAgentTopBar(
-    engineMode: EngineMode,
     usedTokens: Int,
     maxTokens: Int,
-    onSwitchMode: (EngineMode) -> Unit,
     toggleInspector: (Boolean) -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -80,26 +76,6 @@ fun PocketAgentTopBar(
                 )
             }
 
-            Row(
-                modifier = Modifier
-                    .clip(RoundedCornerShape(50))
-                    .background(MaterialTheme.colorScheme.surfaceContainer)
-                    .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(50))
-                    .padding(3.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                EngineModePill(
-                    label = "Demo Sim",
-                    selected = engineMode == EngineMode.DEMO_SIM,
-                    onClick = { onSwitchMode(EngineMode.DEMO_SIM) }
-                )
-                EngineModePill(
-                    label = "Gemini Live",
-                    selected = engineMode == EngineMode.GEMINI_LIVE,
-                    onClick = { onSwitchMode(EngineMode.GEMINI_LIVE) }
-                )
-            }
-
             val formattedUsed = String.format(Locale.US, "%.1f", usedTokens / 1000f)
             Surface(
                 color = MaterialTheme.colorScheme.surfaceContainer,
@@ -113,7 +89,8 @@ fun PocketAgentTopBar(
                     )
                     .semantics {
                         role = Role.Button
-                        contentDescription = "Token usage: $formattedUsed K of ${maxTokens / 1000}K tokens. Tap to inspect Room database."
+                        contentDescription =
+                            "Token usage: $formattedUsed K of ${maxTokens / 1000}K tokens. Tap to inspect Room database."
                     }
             ) {
                 Text(
@@ -130,32 +107,26 @@ fun PocketAgentTopBar(
     }
 }
 
+@Preview(showBackground = true, widthDp = 412)
 @Composable
-private fun EngineModePill(
-    label: String,
-    selected: Boolean,
-    onClick: () -> Unit
-) {
-    Box(
-        modifier = Modifier
-            .clip(RoundedCornerShape(50))
-            .background(if (selected) MaterialTheme.colorScheme.primary else Color.Transparent)
-            .clickable(
-                onClickLabel = "Select $label mode",
-                onClick = onClick
-            )
-            .semantics {
-                role = Role.RadioButton
-                contentDescription = "$label mode, ${if (selected) "selected" else "not selected"}"
-            }
-            .padding(horizontal = 12.dp, vertical = 6.dp),
-        contentAlignment = Alignment.Center
-    ) {
-        Text(
-            text = label,
-            color = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
-            fontSize = 12.sp,
-            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium
+private fun PocketAgentTopBarDemoSimPreview() {
+    PocketAgentTheme {
+        PocketAgentTopBar(
+            usedTokens = 1400,
+            maxTokens = 8000,
+            toggleInspector = {}
+        )
+    }
+}
+
+@Preview(showBackground = true, widthDp = 412)
+@Composable
+private fun PocketAgentTopBarGeminiLivePreview() {
+    PocketAgentTheme {
+        PocketAgentTopBar(
+            usedTokens = 3200,
+            maxTokens = 8000,
+            toggleInspector = {}
         )
     }
 }

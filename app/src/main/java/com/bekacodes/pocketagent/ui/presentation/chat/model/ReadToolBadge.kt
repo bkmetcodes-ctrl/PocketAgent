@@ -1,4 +1,4 @@
-package com.bekacodes.pocketagent.ui.presentation.chat.components
+package com.bekacodes.pocketagent.ui.presentation.chat.model
 
 import androidx.compose.runtime.Immutable
 

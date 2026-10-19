@@ -40,12 +40,15 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.bekacodes.pocketagent.ui.presentation.chat.model.ApprovalResolution
 import com.bekacodes.pocketagent.ui.presentation.chat.model.ChatMessageUiModel
 import com.bekacodes.pocketagent.ui.presentation.chat.model.MessageStreamStatus
 import com.bekacodes.pocketagent.ui.presentation.chat.model.PendingWriteCardState
+import com.bekacodes.pocketagent.ui.presentation.chat.model.ReadToolBadge
+import com.bekacodes.pocketagent.ui.theme.PocketAgentTheme
 import com.bekacodes.pocketagent.ui.theme.PocketColors
 
 /**
@@ -54,8 +57,8 @@ import com.bekacodes.pocketagent.ui.theme.PocketColors
 @Composable
 fun AgentMessageItem(
     message: ChatMessageUiModel.AgentMessage,
-    onApproveWrite: (String) -> Unit,
-    onRejectWrite: (String) -> Unit,
+    onApproveWrite: () -> Unit,
+    onRejectWrite: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     Row(
@@ -67,7 +70,8 @@ fun AgentMessageItem(
                 .size(34.dp)
                 .clip(CircleShape)
                 .background(MaterialTheme.colorScheme.primary)
-                .semantics { contentDescription = "PocketAgent Avatar" },
+                .semantics { contentDescription = "PocketAgent Avatar" }
+                .padding(bottom = 2.dp),
             contentAlignment = Alignment.Center
         ) {
             Text(
@@ -102,8 +106,8 @@ fun AgentMessageItem(
             message.pendingWriteApproval?.let { cardState ->
                 PendingWriteApprovalCard(
                     state = cardState,
-                    onApprove = { onApproveWrite(cardState.callId) },
-                    onReject = { onRejectWrite(cardState.callId) }
+                    onApprove = { onApproveWrite() },
+                    onReject = { onRejectWrite() }
                 )
             }
 
@@ -112,7 +116,9 @@ fun AgentMessageItem(
                     color = PocketColors.Amber.copy(alpha = 0.12f),
                     shape = RoundedCornerShape(6.dp),
                     border = BorderStroke(1.dp, PocketColors.Amber.copy(alpha = 0.4f)),
-                    modifier = Modifier.semantics { contentDescription = "Generation stopped by user" }
+                    modifier = Modifier.semantics {
+                        contentDescription = "Generation stopped by user"
+                    }
                 ) {
                     Text(
                         text = "⏹ Generation stopped by user",
@@ -178,7 +184,9 @@ private fun PendingWriteApprovalCard(
         border = BorderStroke(1.dp, PocketColors.Amber.copy(alpha = 0.5f)),
         modifier = Modifier
             .fillMaxWidth()
-            .semantics { contentDescription = "Pending Database Write Approval Card for ${state.actionName}" }
+            .semantics {
+                contentDescription = "Pending Database Write Approval Card for ${state.actionName}"
+            }
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -313,7 +321,9 @@ private fun PendingWriteApprovalCard(
                         fontSize = 13.sp,
                         fontWeight = FontWeight.Bold,
                         fontFamily = FontFamily.Monospace,
-                        modifier = Modifier.semantics { contentDescription = "Saved to Local Room Database" }
+                        modifier = Modifier.semantics {
+                            contentDescription = "Saved to Local Room Database"
+                        }
                     )
                 }
 
@@ -324,7 +334,9 @@ private fun PendingWriteApprovalCard(
                         fontSize = 13.sp,
                         fontWeight = FontWeight.Bold,
                         fontFamily = FontFamily.Monospace,
-                        modifier = Modifier.semantics { contentDescription = "Write Rejected by User" }
+                        modifier = Modifier.semantics {
+                            contentDescription = "Write Rejected by User"
+                        }
                     )
                 }
             }
@@ -350,5 +362,60 @@ private fun rememberParsedMarkdown(rawText: String) = remember(rawText) {
                 append(segment)
             }
         }
+    }
+}
+
+@Preview
+@Composable
+private fun AgentMessageItemBasicPreview() {
+    PocketAgentTheme {
+        AgentMessageItem(
+            message = ChatMessageUiModel.AgentMessage(
+                id = "agent_1",
+                timestamp = "9:41 AM",
+                executedReadTools = listOf(
+                    ReadToolBadge(
+                        callSignature = "get_expenses(category='Coffee')",
+                        durationMs = 14
+                    )
+                ),
+                markdownText = "You've spent **$42.50** across 9 coffee visits in October.",
+                status = MessageStreamStatus.Completed
+            ),
+            onApproveWrite = {},
+            onRejectWrite = {}
+        )
+    }
+}
+
+@Preview
+@Composable
+private fun AgentMessageItemPendingApprovalPreview() {
+    PocketAgentTheme {
+        AgentMessageItem(
+            message = ChatMessageUiModel.AgentMessage(
+                id = "agent_2",
+                timestamp = "9:41 AM",
+                executedReadTools = listOf(
+                    ReadToolBadge(
+                        callSignature = "get_expenses(category='Coffee')",
+                        durationMs = 14
+                    )
+                ),
+                markdownText = "Before I update your ledger, please confirm the new dinner entry:",
+                pendingWriteApproval = PendingWriteCardState(
+                    callId = "call_99",
+                    actionName = "INSERT_EXPENSE",
+                    fields = listOf(
+                        "Amount" to "$28.00",
+                        "Category" to "Dining Out",
+                        "Date" to "Yesterday"
+                    )
+                ),
+                status = MessageStreamStatus.AwaitingApproval
+            ),
+            onApproveWrite = {},
+            onRejectWrite = {}
+        )
     }
 }

@@ -269,7 +269,6 @@ class ChatViewModelTest {
         viewModel.onIntent(
             ChatIntent.ResolveWriteApproval(
                 messageId = agentMsg.id,
-                callId = approvalCard!!.callId,
                 approved = true,
             ),
         )
@@ -308,7 +307,6 @@ class ChatViewModelTest {
         viewModel.onIntent(
             ChatIntent.ResolveWriteApproval(
                 messageId = agentMsg.id,
-                callId = approvalCard!!.callId,
                 approved = false,
             ),
         )
@@ -347,7 +345,6 @@ class ChatViewModelTest {
         viewModel.onIntent(
             ChatIntent.ResolveWriteApproval(
                 messageId = agentMsg.id,
-                callId = approvalCard!!.callId,
                 approved = true,
             ),
         )

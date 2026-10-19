@@ -1,7 +1,6 @@
 package com.bekacodes.pocketagent.ui.presentation.chat.model
 
 import androidx.compose.runtime.Immutable
-import com.bekacodes.pocketagent.ui.presentation.chat.components.ReadToolBadge
 
 /**
  * UI model representing chat items rendered inside the main chat list.

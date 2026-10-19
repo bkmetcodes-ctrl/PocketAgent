@@ -19,7 +19,6 @@ sealed interface ChatIntent {
     /** Resolves pending database write card approval or rejection. */
     data class ResolveWriteApproval(
         val messageId: String,
-        val callId: String,
         val approved: Boolean
     ) : ChatIntent
 

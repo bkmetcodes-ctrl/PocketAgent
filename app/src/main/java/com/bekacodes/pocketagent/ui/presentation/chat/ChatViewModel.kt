@@ -12,7 +12,6 @@ import com.bekacodes.pocketagent.domain.AgentToolRegistry
 import com.bekacodes.pocketagent.domain.AuditResult
 import com.bekacodes.pocketagent.domain.ContextWindowManager
 import com.bekacodes.pocketagent.domain.ToolCallAuditor
-import com.bekacodes.pocketagent.ui.presentation.chat.components.ReadToolBadge
 import com.bekacodes.pocketagent.ui.presentation.chat.model.ApprovalResolution
 import com.bekacodes.pocketagent.ui.presentation.chat.model.ChatIntent
 import com.bekacodes.pocketagent.ui.presentation.chat.model.ChatMessageUiModel
@@ -20,6 +19,7 @@ import com.bekacodes.pocketagent.ui.presentation.chat.model.ChatUiState
 import com.bekacodes.pocketagent.ui.presentation.chat.model.EngineMode
 import com.bekacodes.pocketagent.ui.presentation.chat.model.MessageStreamStatus
 import com.bekacodes.pocketagent.ui.presentation.chat.model.PendingWriteCardState
+import com.bekacodes.pocketagent.ui.presentation.chat.model.ReadToolBadge
 import com.bekacodes.pocketagent.ui.presentation.chat.model.StreamPipelineEvent
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.CancellationException
@@ -77,10 +77,7 @@ class ChatViewModel @Inject constructor(
     private var pendingApprovalDeferred: CompletableDeferred<Boolean>? = null
 
     init {
-        observeExpenses()
-    }
-
-    private fun observeExpenses() {
+        // Observing Expenses
         viewModelScope.launch {
             expenseRepository.observeAllExpenses()
                 .catch { e ->
@@ -113,6 +110,7 @@ class ChatViewModel @Inject constructor(
                     }
                 }
             }
+
             is ChatIntent.SendPrompt -> startStreamingTurn(intent.prompt)
             is ChatIntent.StopGeneration -> stopGenerationInternal()
             is ChatIntent.ResolveWriteApproval -> {
@@ -198,8 +196,19 @@ class ChatViewModel @Inject constructor(
                         }
                     }
                     .flowOn(defaultDispatcher)
-                    .collect { updatedMsg ->
-                        updateAgentMessage(agentMsgId) { updatedMsg }
+                    .collect { updatedAgentMsg ->
+                        updateAgentMessage(agentMsgId) { existingMsg ->
+                            // Prevent incoming token chunks from overwriting an already approved/rejected card state
+                            val resolvedApproval = updatedAgentMsg.pendingWriteApproval?.let { incomingCard ->
+                                val existingCard = existingMsg.pendingWriteApproval
+                                if (existingCard != null && existingCard.resolution != ApprovalResolution.PENDING) {
+                                    incomingCard.copy(resolution = existingCard.resolution)
+                                } else {
+                                    incomingCard
+                                }
+                            }
+                            updatedAgentMsg.copy(pendingWriteApproval = resolvedApproval)
+                        }
                     }
 
                 updateAgentMessage(agentMsgId) { it.copy(status = MessageStreamStatus.Completed) }
@@ -234,6 +243,7 @@ class ChatViewModel @Inject constructor(
     }
 
     private fun resolveWriteApproval(messageId: String, approved: Boolean) {
+        // 1. Immediately update the UI state to lock/hide the buttons and show the final status
         updateAgentMessage(messageId) { msg ->
             msg.copy(
                 pendingWriteApproval = msg.pendingWriteApproval?.copy(
@@ -241,6 +251,8 @@ class ChatViewModel @Inject constructor(
                 )
             )
         }
+
+        // 2. Resume the suspended coroutine inside orchestrateTurn / orchestrateLiveGeminiTurn
         pendingApprovalDeferred?.complete(approved)
     }
 
@@ -298,7 +310,9 @@ class ChatViewModel @Inject constructor(
                                 send(
                                     StreamPipelineEvent.ReadToolCompleted(
                                         signature = tempSig,
-                                        durationMs = timed.duration.inWholeMilliseconds.coerceAtLeast(1)
+                                        durationMs = timed.duration.inWholeMilliseconds.coerceAtLeast(
+                                            1
+                                        )
                                     )
                                 )
 
@@ -343,7 +357,10 @@ class ChatViewModel @Inject constructor(
     /**
      * DEMO SIMULATOR ORCHESTRATOR (Offline fallback when Demo Sim pill is selected)
      */
-    private fun orchestrateDemoSimTurn(prompt: String, agentMsgId: String): Flow<StreamPipelineEvent> = callbackFlow {
+    private fun orchestrateDemoSimTurn(
+        prompt: String,
+        agentMsgId: String
+    ): Flow<StreamPipelineEvent> = callbackFlow {
         val job = launch {
             val lower = prompt.lowercase().trim()
 
@@ -361,7 +378,8 @@ class ChatViewModel @Inject constructor(
 
                     streamWords("Are you sure you want to permanently clear all expenses from your local database?")
 
-                    val deferred = CompletableDeferred<Boolean>().also { pendingApprovalDeferred = it }
+                    val deferred =
+                        CompletableDeferred<Boolean>().also { pendingApprovalDeferred = it }
                     send(
                         StreamPipelineEvent.RequestWriteApproval(
                             PendingWriteCardState(
@@ -390,7 +408,8 @@ class ChatViewModel @Inject constructor(
 
                     streamWords("I can remove your most recent expense entry. Please confirm below:")
 
-                    val deferred = CompletableDeferred<Boolean>().also { pendingApprovalDeferred = it }
+                    val deferred =
+                        CompletableDeferred<Boolean>().also { pendingApprovalDeferred = it }
                     send(
                         StreamPipelineEvent.RequestWriteApproval(
                             PendingWriteCardState(
@@ -412,16 +431,24 @@ class ChatViewModel @Inject constructor(
                 }
 
                 // 3. Query / Summary
-                lower.contains("summary") || lower.contains("how much") || lower.contains("total") || lower.contains("list") -> {
+                lower.contains("summary") || lower.contains("how much") || lower.contains("total") || lower.contains(
+                    "list"
+                ) -> {
                     val getTool = toolRegistry.getTool("get_expenses")!!
                     val sig = "get_expenses()"
                     send(StreamPipelineEvent.ReadToolStarted(sig))
                     delay(250)
 
                     val timed = measureTimedValue { getTool.execute(buildJsonObject {}) }
-                    send(StreamPipelineEvent.ReadToolCompleted(sig, timed.duration.inWholeMilliseconds.coerceAtLeast(1)))
+                    send(
+                        StreamPipelineEvent.ReadToolCompleted(
+                            sig,
+                            timed.duration.inWholeMilliseconds.coerceAtLeast(1)
+                        )
+                    )
 
-                    val total = timed.value.jsonOutput["totalAmountUsd"]?.jsonPrimitive?.double ?: 0.0
+                    val total =
+                        timed.value.jsonOutput["totalAmountUsd"]?.jsonPrimitive?.double ?: 0.0
                     val count = timed.value.jsonOutput["visitCount"]?.jsonPrimitive?.int ?: 0
 
                     if (count == 0) {
@@ -429,7 +456,13 @@ class ChatViewModel @Inject constructor(
                     } else {
                         streamWords(
                             "Across **$count** recorded transactions in your local SQLite ledger, " +
-                                    "your total spending is **$${String.format(Locale.US, "%.2f", total)}**."
+                                    "your total spending is **$${
+                                        String.format(
+                                            Locale.US,
+                                            "%.2f",
+                                            total
+                                        )
+                                    }**."
                         )
                     }
                 }
@@ -445,7 +478,13 @@ class ChatViewModel @Inject constructor(
                     }
 
                     streamWords(
-                        "Please confirm the new **$${String.format(Locale.US, "%.2f", parsedAmount)}** **$category** entry before I save it to your ledger:"
+                        "Please confirm the new **$${
+                            String.format(
+                                Locale.US,
+                                "%.2f",
+                                parsedAmount
+                            )
+                        }** **$category** entry before I save it to your ledger:"
                     )
 
                     val insertTool = toolRegistry.getTool("insert_expense")!!
@@ -459,7 +498,8 @@ class ChatViewModel @Inject constructor(
                     val audit = ToolCallAuditor.audit("insert_expense", writeArgs, toolRegistry)
                     if (audit is AuditResult.Valid) {
                         val preview = insertTool.buildApprovalPreview(audit.sanitizedArgs)!!
-                        val approvalDeferred = CompletableDeferred<Boolean>().also { pendingApprovalDeferred = it }
+                        val approvalDeferred =
+                            CompletableDeferred<Boolean>().also { pendingApprovalDeferred = it }
                         send(
                             StreamPipelineEvent.RequestWriteApproval(
                                 PendingWriteCardState(
@@ -476,7 +516,13 @@ class ChatViewModel @Inject constructor(
                             }
                             val rowId = writeResult.jsonOutput["insertedRowId"]?.jsonPrimitive?.long
                             streamWords(
-                                "\n\nSaved! Logged **$${String.format(Locale.US, "%.2f", parsedAmount)}** under **$category** (SQLite Row **#ID-$rowId**)."
+                                "\n\nSaved! Logged **$${
+                                    String.format(
+                                        Locale.US,
+                                        "%.2f",
+                                        parsedAmount
+                                    )
+                                }** under **$category** (SQLite Row **#ID-$rowId**)."
                             )
                         } else {
                             streamWords("\n\nUnderstood—I discarded the entry and left your database unchanged.")
