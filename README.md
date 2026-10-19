@@ -4,6 +4,8 @@ An AI-first personal finance assistant built with **Kotlin**, **Jetpack Compose*
 
 Instead of acting as a passive text chatbot, **PocketAgent** demonstrates **on-device MCP (Model Context Protocol) tool calling**, **lossless SSE token streaming**, **deterministic hallucination guardrails**, and **Human-in-the-Loop (HITL) coroutine suspension** for mutating database operations.
 
+<img width="576" height="1296" alt="Image" src="https://github.com/user-attachments/assets/daee6bd9-801f-4a71-a8b1-e5787d47f346" />
+
 ---
 
 ## ✨ Key Architectural Highlights
